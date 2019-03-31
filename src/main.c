@@ -16,6 +16,18 @@
 #include <bluetooth/uuid.h>
 #include <bluetooth/gatt.h>
 
+#include <disk_access.h>
+#include <fs.h>
+#include <ff.h>
+
+#define SD_MOUNT_POINT "/SD:"
+static FATFS fat_fs;
+static struct fs_mount_t mp = {
+    .type = FS_FATFS,
+    .fs_data = &fat_fs,
+    .mnt_point = SD_MOUNT_POINT,
+};
+
 static struct bt_uuid_128 uuid_service = BT_UUID_INIT_128(
     0xf0, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
     0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
@@ -108,9 +120,56 @@ static void bt_ready(int err)
     printk("Advertising successfully started\n");
 }
 
+static int init_fs(void)
+{
+    int err;
+    static const char *disk_pdrv = "SD";
+    u64_t memory_size_mb;
+    u32_t block_count;
+    u32_t block_size;
+
+    err = disk_access_init(disk_pdrv);
+    if (err) {
+        printk("Storage init ERROR (err %d)!\n", err);
+        return -1;
+    }
+
+    err = disk_access_ioctl(disk_pdrv, DISK_IOCTL_GET_SECTOR_COUNT, &block_count);
+    if (err) {
+        printk("Unable to get sector count (err %d)\n", err);
+        return -1;
+    }
+    printk("Block count %u\n", block_count);
+
+    err = disk_access_ioctl(disk_pdrv, DISK_IOCTL_GET_SECTOR_SIZE, &block_size);
+    if (err) {
+        printk("Unable to get sector size (err %d)\n", err);
+        return -1;
+    }
+    printk("Sector size %u\n", block_size);
+
+    memory_size_mb = (u64_t)block_count * block_size;
+    printk("Memory Size(MB) %u\n", (u32_t)(memory_size_mb>>20));
+
+    err = fs_mount(&mp);
+    if (err != FR_OK) {
+        printk("Error mounting disk. (err %d)\n", err);
+        return -1;
+    }
+
+    printk("Disk mounted.\n");
+    return 0;
+}
+
 void main(void)
 {
     int err;
+
+    err = init_fs();
+    if (err) {
+        printk("FS init failed (err %d)\n", err);
+        return;
+    }
 
     err = bt_enable(bt_ready);
     if (err) {
