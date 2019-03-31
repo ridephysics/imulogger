@@ -49,6 +49,7 @@ static struct bt_uuid_128 uuid_chr_logname = BT_UUID_INIT_128(
 
 static uint8_t logger_active = 0;
 static char logname[32] = "default";
+static struct bt_conn *current_bt_conn = NULL;
 
 static ssize_t active_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
             void *buf, u16_t len, u16_t offset)
@@ -125,18 +126,31 @@ static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 };
 
+static void disconnect_timer_handler(struct k_timer *dummy)
+{
+    printk("disconnect bluetooth connection\n");
+    bt_conn_disconnect(current_bt_conn, ETIMEDOUT);
+}
+K_TIMER_DEFINE(disconnect_timer, disconnect_timer_handler, NULL);
+
 static void connected(struct bt_conn *conn, u8_t err)
 {
     if (err) {
         printk("Connection failed (err %u)\n", err);
     } else {
         printk("Connected\n");
+        bt_conn_ref(conn);
+        current_bt_conn = conn;
+        k_timer_start(&disconnect_timer, K_MSEC(60000), 0);
     }
 }
 
 static void disconnected(struct bt_conn *conn, u8_t reason)
 {
     printk("Disconnected (reason %u)\n", reason);
+    k_timer_stop(&disconnect_timer);
+    bt_conn_unref(current_bt_conn);
+    current_bt_conn = NULL;
 }
 
 static struct bt_conn_cb conn_callbacks = {
