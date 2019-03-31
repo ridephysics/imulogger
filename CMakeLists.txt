@@ -6,3 +6,8 @@ project(imulogger)
 target_sources(app PRIVATE
   src/main.c
 )
+
+zephyr_library_link_libraries(
+    crossi2c
+    em7180
+)

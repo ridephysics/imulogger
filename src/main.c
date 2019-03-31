@@ -20,6 +20,9 @@
 #include <fs.h>
 #include <ff.h>
 
+#include <crossi2c/zephyr.h>
+#include <em7180.h>
+
 #define SD_MOUNT_POINT "/SD:"
 static FATFS fat_fs;
 static struct fs_mount_t mp = {
@@ -27,6 +30,10 @@ static struct fs_mount_t mp = {
     .fs_data = &fat_fs,
     .mnt_point = SD_MOUNT_POINT,
 };
+
+#define I2C_DEV DT_I2C_0_NAME
+static struct crossi2c_bus i2cbus;
+static struct em7180 em7180;
 
 static struct bt_uuid_128 uuid_service = BT_UUID_INIT_128(
     0xf0, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
@@ -161,6 +168,39 @@ static int init_fs(void)
     return 0;
 }
 
+static int init_imu(void) {
+    int err;
+    struct device *i2c_dev;
+
+    i2c_dev = device_get_binding(I2C_DEV);
+    if (!i2c_dev) {
+        printk("I2C: Device driver not found.\n");
+        return -1;
+    }
+
+    err = crossi2c_zephyr_create(&i2cbus, i2c_dev);
+    if (err) {
+        printk("crossi2c init failed (err %d)\n", err);
+        return -1;
+    }
+
+    err = em7180_create(&em7180, &i2cbus);
+    if (err)  {
+        printk("em7180 creation failed (err %d)\n", err);
+        return -1;
+    }
+
+    err = em7180_init(&em7180);
+    if (err)  {
+        printk("em7180 init failed (err %d)\n", err);
+        return -1;
+    }
+
+    em7180_set_algorithm(&em7180, EM7180_AS_STANDBY);
+
+    return 0;
+}
+
 void main(void)
 {
     int err;
@@ -168,6 +208,12 @@ void main(void)
     err = init_fs();
     if (err) {
         printk("FS init failed (err %d)\n", err);
+        return;
+    }
+
+    err = init_imu();
+    if (err) {
+        printk("IMU init failed (err %d)\n", err);
         return;
     }
 
@@ -179,7 +225,37 @@ void main(void)
 
     bt_conn_cb_register(&conn_callbacks);
 
-    while (1) {
-        k_sleep(MSEC_PER_SEC);
+    for (; 1; k_sleep(MSEC_PER_SEC)) {
+        uint8_t event_status;
+
+        err = em7180_get_event_status(&em7180, &event_status);
+        if (err) {
+            printk("Unable to get event status (err %d)\n", err);
+            continue;
+        }
+        em7180_print_event_status(event_status);
+
+        if (event_status & EM7180_EVENT_ERROR) {
+            enum em7180_error error;
+
+            err = em7180_get_error_register(&em7180, &error);
+            if (err) {
+                printk("Unable to get error register (err %d)\n", err);
+                continue;
+            }
+            em7180_print_error(error);
+        }
+
+        if (event_status & EM7180_EVENT_QUAT_RES) {
+            uint32_t quat[4];
+
+            err = em7180_get_data_quaternion(&em7180, quat, NULL);
+            if (err) {
+                printk("Unable to get error quaternion (err %d)\n", err);
+                continue;
+            }
+
+            printk("quat: %u|%u|%u|%u\n", quat[0], quat[1], quat[2], quat[3]);
+        }
     }
 }
