@@ -43,7 +43,12 @@ static struct bt_uuid_128 uuid_chr_active = BT_UUID_INIT_128(
     0xf1, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
     0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
 
+static struct bt_uuid_128 uuid_chr_logname = BT_UUID_INIT_128(
+    0xf2, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
+    0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
+
 static uint8_t logger_active = 0;
+static char logname[32] = "default";
 
 static ssize_t active_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
             void *buf, u16_t len, u16_t offset)
@@ -71,6 +76,31 @@ static ssize_t active_write(struct bt_conn *conn, const struct bt_gatt_attr *att
     return 1;
 }
 
+static ssize_t logname_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+            void *buf, u16_t len, u16_t offset)
+{
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, logname, strlen(logname));
+}
+
+static ssize_t logname_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+             const void *buf, u16_t len, u16_t offset,
+             u8_t flags)
+{
+    if (offset != 0) {
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+    }
+    if (len > sizeof(logname) - 1) {
+        return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+    }
+
+    memcpy(logname, buf, len);
+    logname[len] = '\0';
+
+    printk("new logname: %s\n", logname);
+
+    return len;
+}
+
 static struct bt_gatt_attr vnd_attrs[] = {
     BT_GATT_PRIMARY_SERVICE(&uuid_service),
 
@@ -80,6 +110,13 @@ static struct bt_gatt_attr vnd_attrs[] = {
         active_read, active_write, NULL
     ),
     BT_GATT_CUD("active", BT_GATT_PERM_READ),
+
+    BT_GATT_CHARACTERISTIC(&uuid_chr_logname.uuid,
+        BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
+        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+        logname_read, logname_write, NULL
+    ),
+    BT_GATT_CUD("logname", BT_GATT_PERM_READ),
 };
 
 static struct bt_gatt_service vnd_svc = BT_GATT_SERVICE(vnd_attrs);
