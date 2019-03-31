@@ -1,0 +1,20 @@
+identifier: nrf51_imulogger
+name: nRF51-IMULOGGER
+type: mcu
+arch: arm
+toolchain:
+  - zephyr
+  - gnuarmemb
+  - xtools
+ram: 16
+supported:
+  - adc
+  - ble
+  - nvs
+  - pwm
+  - watchdog
+  - counter
+testing:
+  default: true
+  ignore_tags:
+    - net
