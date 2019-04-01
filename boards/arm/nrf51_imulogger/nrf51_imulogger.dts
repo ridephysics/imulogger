@@ -100,6 +100,7 @@
 	status = "ok";
 	sda-pin = <30>;
 	scl-pin = <7>;
+	clock-frequency = <I2C_BITRATE_FAST>;
 };
 
 &i2c1 {
