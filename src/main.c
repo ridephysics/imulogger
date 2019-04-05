@@ -533,6 +533,7 @@ static int init_imu(void) {
 static void do_log(void) {
     int err;
     static struct fs_file_t log_file;
+    uint8_t alg_status;
     uint8_t event_status;
     uint8_t error_reg;
     s64_t uptime;
@@ -553,6 +554,12 @@ static void do_log(void) {
         if (!atomic_get(&logger_active)) {
             printk("logger got disabled\n");
             break;
+        }
+
+        err = em7180_get_algorithm_status(&em7180, &alg_status);
+        if (err) {
+            printk("Unable to get algorithm status (err %d)\n", err);
+            continue;
         }
 
         err = em7180_get_event_status(&em7180, &event_status);
@@ -593,6 +600,12 @@ static void do_log(void) {
         err = fs_write(&log_file, &counter, sizeof(counter));
         if (err < 0 || (size_t)err != sizeof(counter)) {
             printk("can't write counter\n");
+            break;
+        }
+
+        err = fs_write(&log_file, &alg_status, sizeof(alg_status));
+        if (err < 0 || (size_t)err != sizeof(alg_status)) {
+            printk("can't write alg_status\n");
             break;
         }
 
