@@ -61,14 +61,6 @@ static struct bt_uuid_128 uuid_chr_fs_unlink = BT_UUID_INIT_128(
     0x03, 0xdf, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
     0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
 
-static struct bt_conn *current_bt_conn = NULL;
-static void disconnect_timer_handler(struct k_timer *dummy)
-{
-    printk("disconnect bluetooth connection\n");
-    bt_conn_disconnect(current_bt_conn, ETIMEDOUT);
-}
-K_TIMER_DEFINE(disconnect_timer, disconnect_timer_handler, NULL);
-
 #define LOGNAME_PREFIX_LEN SD_MOUNT_POINT_LEN + 1
 static atomic_t logger_active = ATOMIC_INIT(0);
 static struct k_sem logger_sem;
@@ -80,16 +72,9 @@ static struct fs_dir_t fs_dir;
 static uint8_t fs_file_valid;
 static struct fs_file_t fs_file;
 
-static void restart_disconnect_timer(void) {
-    if (current_bt_conn) {
-        k_timer_start(&disconnect_timer, K_MSEC(60000), 0);
-    }
-}
-
 static ssize_t active_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
             void *buf, u16_t len, u16_t offset)
 {
-    restart_disconnect_timer();
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &logger_active, sizeof(logger_active));
 }
 
@@ -97,8 +82,6 @@ static ssize_t active_write(struct bt_conn *conn, const struct bt_gatt_attr *att
              const void *buf, u16_t len, u16_t offset,
              u8_t flags)
 {
-    restart_disconnect_timer();
-
     if (offset != 0) {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
     }
@@ -134,7 +117,6 @@ static ssize_t active_write(struct bt_conn *conn, const struct bt_gatt_attr *att
 static ssize_t logname_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
             void *buf, u16_t len, u16_t offset)
 {
-    restart_disconnect_timer();
     return bt_gatt_attr_read(conn, attr, buf, len, offset, logname + LOGNAME_PREFIX_LEN, strlen(logname + LOGNAME_PREFIX_LEN));
 }
 
@@ -142,8 +124,6 @@ static ssize_t logname_write(struct bt_conn *conn, const struct bt_gatt_attr *at
              const void *buf, u16_t len, u16_t offset,
              u8_t flags)
 {
-    restart_disconnect_timer();
-
     if (offset + len > sizeof(logname) - LOGNAME_PREFIX_LEN - 1) {
         strcpy(logname + LOGNAME_PREFIX_LEN, "default");
         return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
@@ -161,8 +141,6 @@ static ssize_t fs_path_write(struct bt_conn *conn, const struct bt_gatt_attr *at
              const void *buf, u16_t len, u16_t offset,
              u8_t flags)
 {
-    restart_disconnect_timer();
-
     if (offset + len > sizeof(fs_path) - SD_MOUNT_POINT_LEN - 1) {
         fs_path[SD_MOUNT_POINT_LEN] = '\0';
         return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
@@ -190,8 +168,6 @@ static ssize_t fs_data_read(struct bt_conn *conn, const struct bt_gatt_attr *att
             void *buf, u16_t len, u16_t offset)
 {
     int err;
-
-    restart_disconnect_timer();
 
     if (offset != 0) {
         printk("non-zero offset '%u' is not allowed\n", offset);
@@ -334,8 +310,6 @@ static ssize_t fs_unlink_write(struct bt_conn *conn, const struct bt_gatt_attr *
 {
     int err;
 
-    restart_disconnect_timer();
-
     if (offset != 0) {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
     }
@@ -414,18 +388,12 @@ static void connected(struct bt_conn *conn, u8_t err)
         printk("Connection failed (err %u)\n", err);
     } else {
         printk("Connected\n");
-        bt_conn_ref(conn);
-        current_bt_conn = conn;
-        restart_disconnect_timer();
     }
 }
 
 static void disconnected(struct bt_conn *conn, u8_t reason)
 {
     printk("Disconnected (reason %u)\n", reason);
-    k_timer_stop(&disconnect_timer);
-    bt_conn_unref(current_bt_conn);
-    current_bt_conn = NULL;
 }
 
 static struct bt_conn_cb conn_callbacks = {
