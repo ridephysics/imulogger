@@ -4,6 +4,7 @@ set(COMPONENT_PRIV_REQUIRES
     crosslog
     uev
     nvs_flash
+    mdns
 )
 
 register_component()

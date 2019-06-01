@@ -7,9 +7,14 @@
 #include <esp32/rom/spi_flash.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
+#include <mdns.h>
 
 #define CROSSLOG_TAG "main"
 #include <crosslog.h>
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#endif
 
 static uev_ctx_t _uev;
 static uev_ctx_t * const uev = &_uev;
@@ -32,15 +37,116 @@ static void init_console(void)
     esp_vfs_dev_uart_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
 }
 
+/* these strings match tcpip_adapter_if_t enumeration */
+static const char * if_str[] = {"STA", "AP", "ETH", "MAX"};
+
+/* these strings match mdns_ip_protocol_t enumeration */
+static const char * ip_protocol_str[] = {"V4", "V6", "MAX"};
+
+static void mdns_print_results(mdns_result_t * results){
+    mdns_result_t * r = results;
+    mdns_ip_addr_t * a = NULL;
+    int i = 1;
+    int t;
+
+    while (r){
+        printf("%d: Interface: %s, Type: %s\n", i++, if_str[r->tcpip_if], ip_protocol_str[r->ip_protocol]);
+        if (r->instance_name) {
+            printf("  PTR : %s\n", r->instance_name);
+        }
+        if (r->hostname) {
+            printf("  SRV : %s.local:%u\n", r->hostname, r->port);
+        }
+        if (r->txt_count) {
+            printf("  TXT : [%u] ", r->txt_count);
+            for(t=0; t<r->txt_count; t++){
+                printf("%s=%s; ", r->txt[t].key, r->txt[t].value?r->txt[t].value:"NULL");
+            }
+            printf("\n");
+        }
+
+        a = r->addr;
+        while (a){
+            if (a->addr.type == IPADDR_TYPE_V6) {
+                printf("  AAAA: " IPV6STR "\n", IPV62STR(a->addr.u_addr.ip6));
+            }
+            else {
+                printf("  A   : " IPSTR "\n", IP2STR(&(a->addr.u_addr.ip4)));
+
+                // TODO: start mqtt client
+            }
+            a = a->next;
+        }
+        r = r->next;
+    }
+
+}
+
+static void query_mdns_service(const char * service_name, const char * proto)
+{
+    CROSSLOGI("Query PTR: %s.%s.local", service_name, proto);
+
+    mdns_result_t * results = NULL;
+    esp_err_t err = mdns_query_ptr(service_name, proto, 3000, 20,  &results);
+    if(err){
+        CROSSLOGE("Query Failed: %s", esp_err_to_name(err));
+        return;
+    }
+    if(!results){
+        CROSSLOGW("No results found!");
+        return;
+    }
+
+    mdns_print_results(results);
+    mdns_query_results_free(results);
+}
+
+static void mdns_task(void *ctx) {
+    for (;;) {
+        query_mdns_service("_imulogger_mqtt_broker", "_tcp");
+        vTaskDelay((5 * 1000) / portTICK_PERIOD_MS);
+    }
+    vTaskDelete(NULL);
+}
+
+static void init_mdns(void) {
+    static StaticTask_t taskbuf;
+    static StackType_t stackbuf[4096];
+    TaskHandle_t task;
+
+    ESP_ERROR_CHECK( mdns_init() );
+    ESP_ERROR_CHECK( mdns_hostname_set("imulogger") );
+    ESP_ERROR_CHECK( mdns_instance_name_set("imulogger") );
+    ESP_ERROR_CHECK( mdns_service_add("FTP", "_ftp", "_tcp", 21, NULL, 0) );
+
+    task = xTaskCreateStatic(mdns_task, "mdns_query", ARRAY_SIZE(stackbuf), NULL,
+        ESP_TASK_MAIN_PRIO, stackbuf, &taskbuf);
+    CROSSLOG_ASSERT(task);
+}
+
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                     int32_t event_id, void* event_data)
 {
-    if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+    switch (event_id) {
+    case WIFI_EVENT_AP_STACONNECTED: {
         wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
         CROSSLOGI("station "MACSTR" join, AID=%d", MAC2STR(event->mac), event->aid);
-    } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
+        break;
+    }
+
+    case WIFI_EVENT_AP_STADISCONNECTED: {
         wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
         CROSSLOGI("station "MACSTR" leave, AID=%d", MAC2STR(event->mac), event->aid);
+        break;
+    }
+
+    case WIFI_EVENT_AP_START:
+        // mdns
+        init_mdns();
+        break;
+
+    default:
+        break;
     }
 }
 
