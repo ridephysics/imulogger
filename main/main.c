@@ -4,6 +4,9 @@
 #include <nvs_flash.h>
 #include <driver/uart.h>
 #include <esp_vfs_dev.h>
+#include <esp32/rom/spi_flash.h>
+#include <esp_system.h>
+#include <esp_wifi.h>
 
 #define CROSSLOG_TAG "main"
 #include <crosslog.h>
@@ -29,6 +32,56 @@ static void init_console(void)
     esp_vfs_dev_uart_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
 }
 
+static void wifi_event_handler(void* arg, esp_event_base_t event_base,
+                                    int32_t event_id, void* event_data)
+{
+    if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+        wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
+        CROSSLOGI("station "MACSTR" join, AID=%d", MAC2STR(event->mac), event->aid);
+    } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
+        wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
+        CROSSLOGI("station "MACSTR" leave, AID=%d", MAC2STR(event->mac), event->aid);
+    }
+}
+
+static void init_softap(void)
+{
+    int rc;
+    uint8_t mac[6];
+
+    ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP));
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
+
+    wifi_config_t wifi_config = {
+        .ap = {
+            .max_connection = 4,
+            .authmode = WIFI_AUTH_WPA_WPA2_PSK
+        },
+    };
+
+    rc = snprintf((char*)wifi_config.ap.ssid, sizeof(wifi_config.ap.ssid), "imulogger-%02x%02x", mac[4], mac[5]);
+    if (rc < 0 || (size_t)rc >= sizeof(wifi_config.ap.ssid)) {
+        CROSSLOGE("can't build SSID: %d", rc);
+        CROSSLOG_ASSERT(0);
+    }
+
+    rc = snprintf((char*)wifi_config.ap.password, sizeof(wifi_config.ap.password), "imusecret-%08x", g_rom_flashchip.device_id);
+    if (rc < 0 || (size_t)rc >= sizeof(wifi_config.ap.password)) {
+        CROSSLOGE("can't build password: %d", rc);
+        CROSSLOG_ASSERT(0);
+    }
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    CROSSLOGV("wifi_init_softap finished. SSID:%s password:%s", wifi_config.ap.ssid, wifi_config.ap.password);
+}
+
 void app_main(void)
 {
     int rc;
@@ -47,6 +100,9 @@ void app_main(void)
     tcpip_adapter_init();
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     init_console();
+
+    // wifi
+    init_softap();
 
     rc = uev_init(uev);
     if (rc) {
