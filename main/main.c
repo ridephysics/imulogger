@@ -1,6 +1,7 @@
-#include <stdio.h>
+#define CROSSLOG_TAG "main"
+#include <crosslog.h>
 
 void app_main(void)
 {
-    printf("Hello world!\n");
+    CROSSLOGI("Hello world!");
 }
