@@ -10,6 +10,7 @@ set(COMPONENT_PRIV_REQUIRES
     nvs_flash
     mdns
     mqttc
+    fatfs
 )
 
 register_component()

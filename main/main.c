@@ -8,6 +8,9 @@
 #include <esp32/rom/spi_flash.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
+#include <esp_vfs_fat.h>
+#include <driver/sdmmc_host.h>
+#include <sdmmc_cmd.h>
 
 #define CROSSLOG_TAG "main"
 #include <crosslog.h>
@@ -103,11 +106,55 @@ static void init_softap(void)
     CROSSLOGV("wifi_init_softap finished. SSID:%s password:%s", wifi_config.ap.ssid, wifi_config.ap.password);
 }
 
+static void init_sdcard(void)
+{
+    esp_err_t erc;
+    sdmmc_card_t *card;
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+
+    // GPIOs 15, 2, 4, 12, 13 should have external 10k pull-ups.
+    // Internal pull-ups are not sufficient. However, enabling internal pull-ups
+    // does make a difference some boards, so we do that here.
+    gpio_set_pull_mode(15, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(2, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(4, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(13, GPIO_PULLUP_ONLY);
+
+    // Note: esp_vfs_fat_sdmmc_mount is an all-in-one convenience function.
+    // Please check its source code and implement error recovery when developing
+    // production applications.
+    erc = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &card);
+    if (erc != ESP_OK) {
+        if (erc == ESP_FAIL) {
+            CROSSLOGE("Failed to mount filesystem. "
+                "If you want the card to be formatted, set format_if_mount_failed = true.");
+        }
+        else {
+            CROSSLOGE("Failed to initialize the card (%s). "
+                "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(erc));
+        }
+        return;
+    }
+
+    // Card has been initialized, print its properties
+    sdmmc_card_print_info(stdout, card);
+}
+
 void app_main(void)
 {
     int rc;
 
     CROSSLOGI("Hello world!");
+
+    esp_log_level_set("sdmmc_req", ESP_LOG_INFO);
+    esp_log_level_set("sdmmc_cmd", ESP_LOG_INFO);
 
     // NVS
     esp_err_t ret = nvs_flash_init();
@@ -121,6 +168,7 @@ void app_main(void)
     tcpip_adapter_init();
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     init_console();
+    init_sdcard();
 
     // uev
     rc = uev_init(uev);
