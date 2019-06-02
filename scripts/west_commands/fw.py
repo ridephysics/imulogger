@@ -26,7 +26,10 @@ class Fw(WestCommand):
         self.build_dir = os.path.join(self.top_dir, 'build')
         self.project_dir = os.path.join(self.top_dir, 'imulogger')
         self.idf_path = os.path.join(self.top_dir, 'external/esp-idf')
-        self.components_dir = os.path.join(self.top_dir, 'components')
+        self.extra_component_dirs = [
+            os.path.join(self.top_dir, 'components'),
+            os.path.join(self.top_dir, 'components/usfs/lib'),
+        ]
         self.sdkconfig_final = os.path.join(self.build_dir, 'sdkconfig')
         self.sdkconfig_defaults = os.path.join(self.build_dir, 'sdkconfig.defaults')
         self.sdkconfigs = [
@@ -88,7 +91,7 @@ class Fw(WestCommand):
         cacheentries = {
             'SDKCONFIG': self.sdkconfig_final,
             'SDKCONFIG_DEFAULTS': self.sdkconfig_defaults,
-            'EXTRA_COMPONENT_DIRS': self.components_dir
+            'EXTRA_COMPONENT_DIRS': ';'.join(self.extra_component_dirs)
         }
         cacheentries_args = ['--define-cache-entry'] + [e + '=' + cacheentries[e] for e in cacheentries]
 
