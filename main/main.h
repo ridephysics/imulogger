@@ -22,6 +22,7 @@ struct mqtt_ctx {
     uint8_t recvbuf[1024];
 };
 
+void init_usfs(void);
 int init_mdns(uev_ctx_t *uev, struct mqtt_ctx *ctx);
 void mdns_resolved_cb(struct mqtt_ctx *ctx);
 

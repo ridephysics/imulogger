@@ -169,6 +169,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     init_console();
     init_sdcard();
+    init_usfs();
 
     // uev
     rc = uev_init(uev);
