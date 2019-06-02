@@ -83,6 +83,7 @@ class Fw(WestCommand):
 
         env = {
             'IDF_PATH': self.idf_path,
+            'MQTT_DIR': os.path.join(self.top_dir, 'external/mqtt-c'),
         }
         cacheentries = {
             'SDKCONFIG': self.sdkconfig_final,
