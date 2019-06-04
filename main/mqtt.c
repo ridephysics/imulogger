@@ -4,10 +4,170 @@
 #define CROSSLOG_TAG "main"
 #include <crosslog.h>
 
-static void publish_callback(void **unused, struct mqtt_response_publish *published)
+enum imucmd {
+    IMUCMD_FULLREPORT = 0x00,
+    IMUCMD_FILENAME = 0x01,
+    IMUCMD_ENABLED = 0x02,
+    IMUCMD_IMUSTATUS = 0x03,
+};
+
+#define TOPIC_CTRL "/imulogger/ctrl"
+#define TOPIC_STATUS "/imulogger/status"
+
+static bool imu_enabled = false;
+static uint8_t imu_status = 0x00;
+static char imu_filename[256];
+static uint8_t outbuf[256];
+
+static bool strequal(const void *s1, size_t s1len, const char *s2) {
+    size_t s2len = strlen(s2);
+
+    if (s1len != s2len) {
+        return false;
+    }
+
+    return !memcmp(s1, s2, s2len);
+}
+
+static inline void dumppub(struct mqtt_response_publish *pub) {
+    CROSSLOG_HEXDUMP(pub->application_message, pub->application_message_size);
+}
+
+static int send_filename(struct mqtt_ctx *ctx) {
+    enum MQTTErrors merr;
+    size_t filenamelen = strlen(imu_filename);
+
+    outbuf[0] = IMUCMD_FILENAME;
+    memcpy(outbuf + 1, imu_filename, filenamelen);
+
+    merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 1 + filenamelen, MQTT_PUBLISH_QOS_0);
+    if (merr != MQTT_OK) {
+        CROSSLOGE("publishing enabled failed: %s", mqtt_error_str(merr));
+        return -1;
+    }
+
+    return 0;
+}
+
+static int send_enabled(struct mqtt_ctx *ctx) {
+    enum MQTTErrors merr;
+
+    outbuf[0] = IMUCMD_ENABLED;
+    outbuf[1] = !!imu_enabled;
+
+    merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 2, MQTT_PUBLISH_QOS_0);
+    if (merr != MQTT_OK) {
+        CROSSLOGE("publishing enabled failed: %s", mqtt_error_str(merr));
+        return -1;
+    }
+
+    return 0;
+}
+
+static int send_imustatus(struct mqtt_ctx *ctx) {
+    enum MQTTErrors merr;
+
+    outbuf[0] = IMUCMD_IMUSTATUS;
+    outbuf[1] = imu_status;
+
+    merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 2, MQTT_PUBLISH_QOS_0);
+    if (merr != MQTT_OK) {
+        CROSSLOGE("publishing enabled failed: %s", mqtt_error_str(merr));
+        return -1;
+    }
+
+    return 0;
+}
+
+static void send_fullreport(struct mqtt_ctx *ctx) {
+    send_filename(ctx);
+    send_imustatus(ctx);
+    send_enabled(ctx);
+}
+
+static int set_filename(struct mqtt_ctx *ctx, const char *filename, size_t filenamesz) {
+    if (filenamesz >= sizeof(imu_filename)) {
+        CROSSLOGE("filenamesz(%zu) is too big", filenamesz);
+        return -1;
+    }
+    memcpy(imu_filename, filename, filenamesz);
+    imu_filename[filenamesz] = '\0';
+
+    return send_filename(ctx);
+}
+
+static int set_enabled(struct mqtt_ctx *ctx, uint8_t enable) {
+    if (enable & ~0x01) {
+        CROSSLOGE("enable must be either 0x00 or 0x01, not 0x%02x", enable);
+        return -1;
+    }
+
+    imu_enabled = enable;
+
+    return send_enabled(ctx);
+}
+
+static void publish_callback(void **pctx, struct mqtt_response_publish *pub)
 {
-    CROSSLOGI("Received publish('%.*s'): %.*s", (int)published->topic_name_size, (const char *)published->topic_name,
-        (int)published->application_message_size, (const char*) published->application_message);
+    struct mqtt_ctx *ctx = *pctx;
+    const uint8_t *msg = pub->application_message;
+    size_t msgsz = pub->application_message_size;
+
+    if (strequal(pub->topic_name, pub->topic_name_size, TOPIC_CTRL)) {
+        if (msgsz < 1 ) {
+            CROSSLOGE("ctrl msgs must be at least 1 byte");
+            dumppub(pub);
+            return;
+        }
+
+        uint8_t _cmd = msg[0];
+        enum imucmd cmd = (enum imucmd)_cmd;
+        switch (cmd) {
+        case IMUCMD_FULLREPORT:
+            if (msgsz != 1) {
+                CROSSLOGE("fullreport request has invalid size: %u", msgsz);
+                dumppub(pub);
+                return;
+            }
+
+            CROSSLOGD("fullreport requested");
+            send_fullreport(ctx);
+            break;
+
+        case IMUCMD_FILENAME: {
+            size_t filenamesz = msgsz - 1;
+            const char *filename = (const char*)(filenamesz ? &msg[1] : NULL);
+            CROSSLOGD("new filename(%zu): %.*s", filenamesz, (int)filenamesz, filename);
+            set_filename(ctx, filename, filenamesz);
+            break;
+        }
+
+        case IMUCMD_ENABLED: {
+            if (msgsz != 2) {
+                CROSSLOGE("enabled request has invalid size: %u", msgsz);
+                dumppub(pub);
+                return;
+            }
+
+            uint8_t enable = msg[1];
+            CROSSLOGD("enable=0x%02x requested", enable);
+            set_enabled(ctx, enable);
+            break;
+        }
+
+        case IMUCMD_IMUSTATUS:
+        default:
+            CROSSLOGE("unsupported ctrl cmd: 0x%02x", _cmd);
+            dumppub(pub);
+            break;
+        }
+    }
+
+    else {
+        CROSSLOGE("unsupported publish topic: %.*s", (int)pub->topic_name_size, (const char *)pub->topic_name);
+        dumppub(pub);
+        return;
+    }
 }
 
 static enum MQTTErrors on_connected(struct mqtt_ctx *ctx, int fd) {
@@ -35,7 +195,7 @@ static enum MQTTErrors on_connected(struct mqtt_ctx *ctx, int fd) {
     }
 
     /* Subscribe to the topic. */
-    merr = mqtt_subscribe(&ctx->client, "test", 0);
+    merr = mqtt_subscribe(&ctx->client, TOPIC_CTRL, 0);
     if (merr != MQTT_OK) {
         CROSSLOGE("mqtt_subscribe: %s", mqtt_error_str(merr));
         close(fd);
@@ -191,6 +351,7 @@ void mdns_resolved_cb(struct mqtt_ctx *ctx) {
         return;
     }
     ctx->client.userctx = ctx;
+    ctx->client.publish_response_callback_state = ctx;
 
     merr = mqtt_start_reconnect(&ctx->client);
     if (merr != MQTT_OK) {
