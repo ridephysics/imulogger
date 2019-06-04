@@ -288,7 +288,7 @@ static enum MQTTErrors try_connect(struct mqtt_ctx *ctx, int fd) {
             return MQTT_OK;
         }
 
-        /* let the mqtt timeout rigger, so we don't retrying without any waiting time */
+        /* let the mqtt timeout trigger, so we don't retry without any waiting time */
         CROSSLOG_ERRNO("connect");
         close(fd);
         return MQTT_ERROR_SOCKET_ERROR;
