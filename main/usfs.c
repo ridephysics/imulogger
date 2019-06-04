@@ -66,15 +66,16 @@ static void usfs_task_fn(void *unused) {
 
         CROSSLOGD("logging started");
 
-        sdcard_init();
+        rc = sdcard_init();
+        if (rc) {
+            CROSSLOGE("can't mount sdcard");
+            goto stop_notify;
+        }
 
         FILE *f = fopen("/sdcard/data.bin", "w");
         if (!f) {
             CROSSLOGE("fopen failed");
-            sdcard_deinit();
-            atomic_store(&logging_enabled, false);
-            uev_event_post(&w_enabled);
-            continue;
+            goto stop_unmount;
         }
 
         uintptr_t datacnt = 0;
@@ -155,7 +156,11 @@ static void usfs_task_fn(void *unused) {
         }
 
         fclose(f);
+stop_unmount:
         sdcard_deinit();
+stop_notify:
+        atomic_store(&logging_enabled, false);
+        uev_event_post(&w_enabled);
         CROSSLOGD("logging stopped");
     }
 

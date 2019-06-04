@@ -106,7 +106,7 @@ static void init_softap(void)
     CROSSLOGV("wifi_init_softap finished. SSID:%s password:%s", wifi_config.ap.ssid, wifi_config.ap.password);
 }
 
-void sdcard_init(void)
+int sdcard_init(void)
 {
     esp_err_t erc;
     sdmmc_card_t *card;
@@ -140,11 +140,13 @@ void sdcard_init(void)
             CROSSLOGE("Failed to initialize the card (%s). "
                 "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(erc));
         }
-        return;
+        return -1;
     }
 
     // Card has been initialized, print its properties
     sdmmc_card_print_info(stdout, card);
+
+    return 0;
 }
 
 void sdcard_deinit(void) {
