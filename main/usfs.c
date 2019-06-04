@@ -4,6 +4,7 @@
 #include <em7180.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <sys/param.h>
 
 #define CROSSLOG_TAG "main"
 #include <crosslog.h>
@@ -26,6 +27,10 @@ static struct list_node listeners = LIST_INITIAL_VALUE(listeners);
 static uev_t w_enabled;
 static uev_t w_status;
 static uev_t w_samplerate;
+
+static inline uint64_t get_now(void) {
+    return (uint64_t)MAX(0, esp_timer_get_time());
+}
 
 static void usfs_task_fn(void *unused) {
     int rc;
@@ -79,7 +84,7 @@ static void usfs_task_fn(void *unused) {
         }
 
         uintptr_t datacnt = 0;
-        int64_t datatime = esp_timer_get_time();
+        uint64_t datatime = get_now();
 
         while (atomic_load(&logging_enabled)) {
             uint8_t event_status;
@@ -139,7 +144,7 @@ static void usfs_task_fn(void *unused) {
                 continue;
             }
 
-            int64_t now = esp_timer_get_time();
+            uint64_t now = get_now();
 
             // calculate samplerate
             datacnt++;
@@ -150,6 +155,22 @@ static void usfs_task_fn(void *unused) {
                 uev_event_post(&w_samplerate);
             }
 
+            // write time
+            if (fwrite(&now, sizeof(now), 1, f) != 1) {
+                CROSSLOGE("can't write time");
+            }
+
+            // write alg status
+            if (fwrite(&alg_status, sizeof(alg_status), 1, f) != 1) {
+                CROSSLOGE("can't algorithm status");
+            }
+
+            // write event status
+            if (fwrite(&event_status, sizeof(event_status), 1, f) != 1) {
+                CROSSLOGE("can't event status");
+            }
+
+            // write sensor data
             if (fwrite(data_raw, sizeof(data_raw), 1, f) != 1) {
                 CROSSLOGE("can't write data");
             }
