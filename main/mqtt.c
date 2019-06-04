@@ -9,13 +9,12 @@ enum imucmd {
     IMUCMD_FILENAME = 0x01,
     IMUCMD_ENABLED = 0x02,
     IMUCMD_IMUSTATUS = 0x03,
+    IMUCMD_SAMPLERATE = 0x04,
 };
 
 #define TOPIC_CTRL "/imulogger/ctrl"
 #define TOPIC_STATUS "/imulogger/status"
 
-static bool imu_enabled = false;
-static uint8_t imu_status = 0x00;
 static char imu_filename[256];
 static uint8_t outbuf[256];
 
@@ -49,11 +48,11 @@ static int send_filename(struct mqtt_ctx *ctx) {
     return 0;
 }
 
-static int send_enabled(struct mqtt_ctx *ctx) {
+static int send_enabled(struct mqtt_ctx *ctx, bool enabled) {
     enum MQTTErrors merr;
 
     outbuf[0] = IMUCMD_ENABLED;
-    outbuf[1] = !!imu_enabled;
+    outbuf[1] = enabled;
 
     merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 2, MQTT_PUBLISH_QOS_0);
     if (merr != MQTT_OK) {
@@ -64,13 +63,31 @@ static int send_enabled(struct mqtt_ctx *ctx) {
     return 0;
 }
 
-static int send_imustatus(struct mqtt_ctx *ctx) {
+static int send_imustatus(struct mqtt_ctx *ctx, uint8_t status) {
     enum MQTTErrors merr;
 
     outbuf[0] = IMUCMD_IMUSTATUS;
-    outbuf[1] = imu_status;
+    outbuf[1] = status;
 
     merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 2, MQTT_PUBLISH_QOS_0);
+    if (merr != MQTT_OK) {
+        CROSSLOGE("publishing enabled failed: %s", mqtt_error_str(merr));
+        return -1;
+    }
+
+    return 0;
+}
+
+static int send_samplerate(struct mqtt_ctx *ctx, unsigned int samplerate) {
+    enum MQTTErrors merr;
+
+    outbuf[0] = IMUCMD_SAMPLERATE;
+    outbuf[1] = samplerate & 0xff;
+    outbuf[2] = (samplerate >> 8) & 0xff;
+    outbuf[3] = (samplerate >> 16) & 0xff;
+    outbuf[4] = (samplerate >> 24) & 0xff;
+
+    merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 5, MQTT_PUBLISH_QOS_0);
     if (merr != MQTT_OK) {
         CROSSLOGE("publishing enabled failed: %s", mqtt_error_str(merr));
         return -1;
@@ -81,8 +98,9 @@ static int send_imustatus(struct mqtt_ctx *ctx) {
 
 static void send_fullreport(struct mqtt_ctx *ctx) {
     send_filename(ctx);
-    send_imustatus(ctx);
-    send_enabled(ctx);
+    send_imustatus(ctx, usfs_status());
+    send_enabled(ctx, usfs_is_enabled());
+    send_samplerate(ctx, usfs_samplerate());
 }
 
 static int set_filename(struct mqtt_ctx *ctx, const char *filename, size_t filenamesz) {
@@ -102,9 +120,9 @@ static int set_enabled(struct mqtt_ctx *ctx, uint8_t enable) {
         return -1;
     }
 
-    imu_enabled = enable;
+    usfs_set_enabled(!!enable);
 
-    return send_enabled(ctx);
+    return 0;
 }
 
 static void publish_callback(void **pctx, struct mqtt_response_publish *pub)
@@ -202,6 +220,9 @@ static enum MQTTErrors on_connected(struct mqtt_ctx *ctx, int fd) {
         return merr;
     }
 
+    usfs_listener_add(&ctx->listener);
+    ctx->listener_registered = true;
+
     return MQTT_OK;
 }
 
@@ -284,6 +305,11 @@ static enum MQTTErrors reconnect_client(struct mqtt_client *client, void **_pctx
 
     CROSSLOGI("(re)connect mqtt client");
 
+    if (ctx->listener_registered) {
+        usfs_listener_del(&ctx->listener);
+        ctx->listener_registered = false;
+    }
+
     /* Close the clients socket if this isn't the initial reconnect call */
     if (client->error != MQTT_ERROR_INITIAL_RECONNECT && client->socketfd >= 0) {
         close(client->socketfd);
@@ -336,6 +362,29 @@ static void fatal_error_callback(struct mqtt_client *client) {
         close(ctx->connect_fd);
         ctx->connect_fd = -1;
     }
+
+    if (ctx->listener_registered) {
+        usfs_listener_del(&ctx->listener);
+        ctx->listener_registered = false;
+    }
+}
+
+static void on_usfs_enabled(void *_ctx, bool enabled) {
+    struct mqtt_ctx *ctx = _ctx;
+
+    send_enabled(ctx, enabled);
+}
+
+static void on_usfs_status(void *_ctx, uint8_t status) {
+    struct mqtt_ctx *ctx = _ctx;
+
+    send_imustatus(ctx, status);
+}
+
+static void on_usfs_samplerate(void *_ctx, unsigned int samplerate) {
+    struct mqtt_ctx *ctx = _ctx;
+
+    send_samplerate(ctx, samplerate);
 }
 
 void mdns_resolved_cb(struct mqtt_ctx *ctx) {
@@ -344,6 +393,10 @@ void mdns_resolved_cb(struct mqtt_ctx *ctx) {
     CROSSLOGI("resolved: " IPSTR ":%u", IP2STR(&(ctx->addr.u_addr.ip4)), ctx->port);
 
     ctx->connect_fd = -1;
+    ctx->listener.ctx = ctx;
+    ctx->listener.enabled = on_usfs_enabled;
+    ctx->listener.status = on_usfs_status;
+    ctx->listener.samplerate = on_usfs_samplerate;
 
     merr = mqtt_init_reconnect(&ctx->client, ctx->uev, reconnect_client, ctx, publish_callback, fatal_error_callback);
     if (merr != MQTT_OK) {

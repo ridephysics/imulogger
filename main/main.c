@@ -106,7 +106,7 @@ static void init_softap(void)
     CROSSLOGV("wifi_init_softap finished. SSID:%s password:%s", wifi_config.ap.ssid, wifi_config.ap.password);
 }
 
-static void init_sdcard(void)
+void sdcard_init(void)
 {
     esp_err_t erc;
     sdmmc_card_t *card;
@@ -147,6 +147,10 @@ static void init_sdcard(void)
     sdmmc_card_print_info(stdout, card);
 }
 
+void sdcard_deinit(void) {
+    esp_vfs_fat_sdmmc_unmount();
+}
+
 void app_main(void)
 {
     int rc;
@@ -168,8 +172,6 @@ void app_main(void)
     tcpip_adapter_init();
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     init_console();
-    init_sdcard();
-    init_usfs();
 
     // uev
     rc = uev_init(uev);
@@ -177,6 +179,9 @@ void app_main(void)
         CROSSLOG_ERRNO("uev_init");
         CROSSLOG_ASSERT(0);
     }
+
+    // USFS
+    init_usfs(uev);
 
     // wifi
     init_softap();
