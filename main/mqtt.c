@@ -15,7 +15,6 @@ enum imucmd {
 #define TOPIC_CTRL "/imulogger/ctrl"
 #define TOPIC_STATUS "/imulogger/status"
 
-static char imu_filename[256];
 static uint8_t outbuf[256];
 
 static bool strequal(const void *s1, size_t s1len, const char *s2) {
@@ -33,11 +32,17 @@ static inline void dumppub(struct mqtt_response_publish *pub) {
 }
 
 static int send_filename(struct mqtt_ctx *ctx) {
+    int rc;
     enum MQTTErrors merr;
-    size_t filenamelen = strlen(imu_filename);
+    size_t filenamelen;
 
     outbuf[0] = IMUCMD_FILENAME;
-    memcpy(outbuf + 1, imu_filename, filenamelen);
+
+    rc = ufsfs_get_filename((char*)&outbuf[1], sizeof(outbuf) - 1, &filenamelen);
+    if (rc) {
+        CROSSLOGE("can't get filename");
+        return -1;
+    }
 
     merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 1 + filenamelen, MQTT_PUBLISH_QOS_0);
     if (merr != MQTT_OK) {
@@ -104,12 +109,13 @@ static void send_fullreport(struct mqtt_ctx *ctx) {
 }
 
 static int set_filename(struct mqtt_ctx *ctx, const char *filename, size_t filenamesz) {
-    if (filenamesz >= sizeof(imu_filename)) {
-        CROSSLOGE("filenamesz(%zu) is too big", filenamesz);
+    int rc;
+
+    rc = usfs_set_filename(filename, filenamesz);
+    if (rc) {
+        CROSSLOGE("can't set filename");
         return -1;
     }
-    memcpy(imu_filename, filename, filenamesz);
-    imu_filename[filenamesz] = '\0';
 
     return send_filename(ctx);
 }

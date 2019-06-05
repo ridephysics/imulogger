@@ -17,6 +17,9 @@ static volatile TaskHandle_t task = NULL;
 static StaticTask_t taskbuf;
 static StackType_t stackbuf[4096];
 
+static StaticSemaphore_t lockbuf;
+static SemaphoreHandle_t lock = NULL;
+static char imu_filename[256];
 static atomic_bool logging_enabled;
 static atomic_char imu_status;
 static atomic_uint samplerate;
@@ -77,7 +80,24 @@ static void usfs_task_fn(void *unused) {
             goto stop_notify;
         }
 
-        FILE *f = fopen("/sdcard/data.bin", "w");
+        xSemaphoreTake(lock, portMAX_DELAY);
+        struct stat sb;
+
+        rc = stat(imu_filename, &sb);
+        if (rc == 0) {
+            CROSSLOGE("file does already exist");
+            xSemaphoreGive(lock);
+            goto stop_unmount;
+        }
+
+        if (errno != ENOENT) {
+            CROSSLOG_ERRNO("stat");
+            xSemaphoreGive(lock);
+            goto stop_unmount;
+        }
+
+        FILE *f = fopen(imu_filename, "w");
+        xSemaphoreGive(lock);
         if (!f) {
             CROSSLOGE("fopen failed");
             goto stop_unmount;
@@ -228,6 +248,12 @@ static void ev_samplerate_cb(uev_t *w, void *arg, int events) {
 void init_usfs(uev_ctx_t *uev) {
     int rc;
 
+    rc = snprintf(imu_filename, sizeof(imu_filename), "/sdcard/default.bin");
+    CROSSLOG_ASSERT(rc >= 0 && rc < sizeof(imu_filename));
+
+    lock = xSemaphoreCreateMutexStatic(&lockbuf);
+    CROSSLOG_ASSERT(lock);
+
     atomic_init(&logging_enabled, false);
     atomic_init(&imu_status, 0x00);
     atomic_init(&samplerate, 0);
@@ -261,6 +287,46 @@ void usfs_set_enabled(bool enabled) {
     atomic_store(&logging_enabled, enabled);
     xTaskNotifyGive(task);
     uev_event_post(&w_enabled);
+}
+
+int usfs_set_filename(const char *new_filename, size_t new_filename_len) {
+    int ret = -1;
+
+    xSemaphoreTake(lock, portMAX_DELAY);
+
+    if (new_filename_len > sizeof(imu_filename) - 1)
+        goto unlock;
+
+    memcpy(imu_filename, new_filename, new_filename_len);
+    imu_filename[new_filename_len] = '\0';
+    ret = 0;
+
+unlock:
+    xSemaphoreGive(lock);
+
+    return ret;
+}
+
+int ufsfs_get_filename(char *buf, size_t bufsz, size_t *poutlen) {
+    int ret = -1;
+
+    xSemaphoreTake(lock, portMAX_DELAY);
+
+    size_t namelen = strlen(imu_filename);
+    if (namelen > bufsz)
+        goto unlock;
+
+    memcpy(buf, imu_filename, namelen);
+
+    if (poutlen)
+        *poutlen = namelen;
+
+    ret = 0;
+
+unlock:
+    xSemaphoreGive(lock);
+
+    return ret;
 }
 
 void usfs_listener_add(struct usfs_listener *listener) {
