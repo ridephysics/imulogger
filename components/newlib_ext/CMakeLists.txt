@@ -1,0 +1,14 @@
+set(COMPONENT_SRCS
+    realpath.c
+    basename.c
+    dirname.c
+    scandir.c
+    reallocarray.c
+)
+set(COMPONENT_ADD_INCLUDEDIRS
+    include
+)
+set(COMPONENT_PRIV_REQUIRES
+    newlib
+)
+register_component()
