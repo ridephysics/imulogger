@@ -15,6 +15,7 @@ set(COMPONENT_PRIV_REQUIRES
     mdns
     mqttc
     fatfs
+    uftpd
 )
 
 register_component()

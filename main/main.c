@@ -11,6 +11,7 @@
 #include <esp_vfs_fat.h>
 #include <driver/sdmmc_host.h>
 #include <sdmmc_cmd.h>
+#include <uftpd.h>
 
 #define CROSSLOG_TAG "main"
 #include <crosslog.h>
@@ -238,6 +239,9 @@ void app_main(void)
 
     // wifi
     init_softap();
+
+    // uftpd
+    uftpd_start(uev);
 
     rc = uev_run(uev, 0);
     if (rc) {
