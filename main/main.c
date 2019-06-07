@@ -175,6 +175,12 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     init_console();
 
+    rc = uev_iothread_init();
+    if (rc) {
+        CROSSLOG_ERRNO("_uev_iothread_init");
+        CROSSLOG_ASSERT(0);
+    }
+
     // uev
     rc = uev_init(uev);
     if (rc) {
