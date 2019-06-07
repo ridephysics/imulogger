@@ -10,12 +10,14 @@ enum imucmd {
     IMUCMD_ENABLED = 0x02,
     IMUCMD_IMUSTATUS = 0x03,
     IMUCMD_SAMPLERATE = 0x04,
+    IMUCMD_SDCARD = 0x05,
 };
 
 #define TOPIC_CTRL "/imulogger/ctrl"
 #define TOPIC_STATUS "/imulogger/status"
 
 static uint8_t outbuf[256];
+static bool sdcard_refed = 0;
 
 static bool strequal(const void *s1, size_t s1len, const char *s2) {
     size_t s2len = strlen(s2);
@@ -101,11 +103,27 @@ static int send_samplerate(struct mqtt_ctx *ctx, unsigned int samplerate) {
     return 0;
 }
 
+static int send_sdcard(struct mqtt_ctx *ctx) {
+    enum MQTTErrors merr;
+
+    outbuf[0] = IMUCMD_SDCARD;
+    outbuf[1] = sdcard_refed;
+
+    merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 2, MQTT_PUBLISH_QOS_0);
+    if (merr != MQTT_OK) {
+        CROSSLOGE("publishing sdcard failed: %s", mqtt_error_str(merr));
+        return -1;
+    }
+
+    return 0;
+}
+
 static void send_fullreport(struct mqtt_ctx *ctx) {
     send_filename(ctx);
     send_imustatus(ctx, usfs_status());
     send_enabled(ctx, usfs_is_enabled());
     send_samplerate(ctx, usfs_samplerate());
+    send_sdcard(ctx);
 }
 
 static int set_filename(struct mqtt_ctx *ctx, const char *filename, size_t filenamesz) {
@@ -136,6 +154,7 @@ static void publish_callback(void **pctx, struct mqtt_response_publish *pub)
     struct mqtt_ctx *ctx = *pctx;
     const uint8_t *msg = pub->application_message;
     size_t msgsz = pub->application_message_size;
+    int rc;
 
     if (strequal(pub->topic_name, pub->topic_name_size, TOPIC_CTRL)) {
         if (msgsz < 1 ) {
@@ -176,6 +195,32 @@ static void publish_callback(void **pctx, struct mqtt_response_publish *pub)
             uint8_t enable = msg[1];
             CROSSLOGD("enable=0x%02x requested", enable);
             set_enabled(ctx, enable);
+            break;
+        }
+
+        case IMUCMD_SDCARD: {
+            if (msgsz != 2) {
+                CROSSLOGE("sdcard request has invalid size: %u", msgsz);
+                dumppub(pub);
+                return;
+            }
+
+            uint8_t doref = msg[1];
+            CROSSLOGD("doref=0x%02x requested", doref);
+            if (doref && !sdcard_refed) {
+                rc = sdcard_ref();
+                if (rc) {
+                    CROSSLOGE("can't ref sdcard");
+                    return;
+                }
+                sdcard_refed = 1;
+                send_sdcard(ctx);
+            }
+            else if (!doref && sdcard_refed) {
+                sdcard_unref();
+                sdcard_refed = 0;
+                send_sdcard(ctx);
+            }
             break;
         }
 
