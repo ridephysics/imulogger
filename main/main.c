@@ -18,6 +18,12 @@
 static uev_ctx_t _uev;
 static uev_ctx_t * const uev = &_uev;
 static struct mqtt_ctx _mqttctx;
+static struct {
+    StaticSemaphore_t lockbuf;
+    SemaphoreHandle_t lock;
+
+    size_t refcnt;
+} sdcard;
 
 static void init_console(void)
 {
@@ -106,7 +112,7 @@ static void init_softap(void)
     CROSSLOGV("wifi_init_softap finished. SSID:%s password:%s", wifi_config.ap.ssid, wifi_config.ap.password);
 }
 
-int sdcard_init(void)
+static int sdcard_init(void)
 {
     esp_err_t erc;
     sdmmc_card_t *card;
@@ -149,8 +155,42 @@ int sdcard_init(void)
     return 0;
 }
 
-void sdcard_deinit(void) {
+static void sdcard_deinit(void) {
     esp_vfs_fat_sdmmc_unmount();
+}
+
+int sdcard_ref(void) {
+    int rc;
+    int ret = -1;
+
+    xSemaphoreTake(sdcard.lock, portMAX_DELAY);
+
+    if (sdcard.refcnt == 0) {
+        rc = sdcard_init();
+        if (rc) {
+            CROSSLOGE("can't init sdcard");
+            goto unlock;
+        }
+    }
+
+    sdcard.refcnt++;
+    CROSSLOGV("sdcard: REFED: %zu", sdcard.refcnt);
+    ret = 0;
+
+unlock:
+    xSemaphoreGive(sdcard.lock);
+
+    return ret;
+}
+
+void sdcard_unref(void) {
+    xSemaphoreTake(sdcard.lock, portMAX_DELAY);
+    if (sdcard.refcnt == 1) {
+        sdcard_deinit();
+    }
+    sdcard.refcnt--;
+    CROSSLOGV("sdcard: UNREFED: %zu", sdcard.refcnt);
+    xSemaphoreGive(sdcard.lock);
 }
 
 void app_main(void)
@@ -169,6 +209,11 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    // sdcard refcnt
+    sdcard.refcnt = 0;
+    sdcard.lock = xSemaphoreCreateMutexStatic(&sdcard.lockbuf);
+    CROSSLOG_ASSERT(sdcard.lock);
 
     // misc globals
     tcpip_adapter_init();

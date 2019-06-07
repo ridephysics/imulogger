@@ -48,7 +48,7 @@ void usfs_listener_del(struct usfs_listener *listener);
 int init_mdns(uev_ctx_t *uev, struct mqtt_ctx *ctx);
 void mdns_resolved_cb(struct mqtt_ctx *ctx);
 
-int sdcard_init(void);
-void sdcard_deinit(void);
+int sdcard_ref(void);
+void sdcard_unref(void);
 
 #endif /* MAIN_H */

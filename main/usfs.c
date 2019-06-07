@@ -74,9 +74,9 @@ static void usfs_task_fn(void *unused) {
 
         CROSSLOGD("logging started");
 
-        rc = sdcard_init();
+        rc = sdcard_ref();
         if (rc) {
-            CROSSLOGE("can't mount sdcard");
+            CROSSLOGE("can't ref sdcard");
             goto stop_notify;
         }
 
@@ -198,7 +198,7 @@ static void usfs_task_fn(void *unused) {
 
         fclose(f);
 stop_unmount:
-        sdcard_deinit();
+        sdcard_unref();
 stop_notify:
         atomic_store(&logging_enabled, false);
         uev_event_post(&w_enabled);
