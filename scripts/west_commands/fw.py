@@ -92,6 +92,7 @@ class Fw(WestCommand):
             'SDKCONFIG_DEFAULTS': self.sdkconfig_defaults,
             'EXTRA_COMPONENT_DIRS': ';'.join(self.extra_component_dirs),
             'MQTT_DIR': os.path.join(self.top_dir, 'external/mqtt-c'),
+            'BMP280_DIR': os.path.join(self.top_dir, 'external/bmp280'),
         }
         args = [
             os.path.join(self.idf_path, 'tools/idf.py'),
