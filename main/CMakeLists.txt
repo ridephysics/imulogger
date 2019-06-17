@@ -9,6 +9,8 @@ set(COMPONENT_PRIV_REQUIRES
     crosslog
     crossi2c
     em7180
+    bmp280
+    eMPL
     usfs
     uev
     nvs_flash
