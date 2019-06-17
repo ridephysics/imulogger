@@ -86,12 +86,12 @@ class Fw(WestCommand):
 
         env = {
             'IDF_PATH': self.idf_path,
-            'MQTT_DIR': os.path.join(self.top_dir, 'external/mqtt-c'),
         }
         cacheentries = {
             'SDKCONFIG': self.sdkconfig_final,
             'SDKCONFIG_DEFAULTS': self.sdkconfig_defaults,
-            'EXTRA_COMPONENT_DIRS': ';'.join(self.extra_component_dirs)
+            'EXTRA_COMPONENT_DIRS': ';'.join(self.extra_component_dirs),
+            'MQTT_DIR': os.path.join(self.top_dir, 'external/mqtt-c'),
         }
         args = [
             os.path.join(self.idf_path, 'tools/idf.py'),

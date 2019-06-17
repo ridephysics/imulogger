@@ -1,10 +1,10 @@
 set(COMPONENT_SRCS
-    $ENV{MQTT_DIR}/src/mqtt.c
+    ${MQTT_DIR}/src/mqtt.c
     mqtt_pal.c
 )
 set(COMPONENT_ADD_INCLUDEDIRS
     include
-    $ENV{MQTT_DIR}/include
+    ${MQTT_DIR}/include
 )
 set(COMPONENT_PRIV_REQUIRES
     uev
