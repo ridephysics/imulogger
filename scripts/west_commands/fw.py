@@ -93,15 +93,18 @@ class Fw(WestCommand):
             'SDKCONFIG_DEFAULTS': self.sdkconfig_defaults,
             'EXTRA_COMPONENT_DIRS': ';'.join(self.extra_component_dirs)
         }
-        cacheentries_args = ['--define-cache-entry'] + [e + '=' + cacheentries[e] for e in cacheentries]
-
         args = [
             os.path.join(self.idf_path, 'tools/idf.py'),
             '-C', self.project_dir,
             '-B', self.build_dir,
             '-G', 'Ninja',
         ]
-        run_cmd(args + addargs + cacheentries_args, env)
+
+        for e in cacheentries:
+            args.append('--define-cache-entry')
+            args.append(e + '=' + cacheentries[e])
+
+        run_cmd(args + addargs, env)
 
     def do_run(self, args, unknown_args):
         self.run_idfpy(unknown_args)
