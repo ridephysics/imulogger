@@ -100,7 +100,7 @@ ssize_t mqtt_pal_send(mqtt_pal_socket_handle fd, const void* buf, size_t len, in
 }
 
 ssize_t mqtt_pal_recv(mqtt_pal_socket_handle fd, void* buf, size_t bufsz, int flags) {
-    const void const *start = buf;
+    const void *start = buf;
     ssize_t rv;
     do {
         rv = recv(fd, buf, bufsz, flags);
