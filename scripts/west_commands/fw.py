@@ -23,7 +23,7 @@ class Fw(WestCommand):
             accepts_unknown_args=True)
 
         self.top_dir = util.west_topdir()
-        self.build_dir = os.path.join(self.top_dir, 'build')
+        self.build_dir = os.path.join(self.top_dir, 'build/imulogger')
         self.project_dir = os.path.join(self.top_dir, 'imulogger')
         self.idf_path = os.path.join(self.top_dir, 'external/esp-idf')
         self.extra_component_dirs = [
