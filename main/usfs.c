@@ -264,7 +264,7 @@ void init_usfs(uev_ctx_t *uev) {
     rc = uev_event_init(uev, &w_samplerate, ev_samplerate_cb, NULL);
     CROSSLOG_ASSERT(rc == 0);
 
-    task = xTaskCreateStatic(usfs_task_fn, "usfs", ARRAY_SIZE(stackbuf), NULL, ESP_TASK_TIMER_PRIO, stackbuf, &taskbuf);
+    task = xTaskCreateStaticPinnedToCore(usfs_task_fn, "usfs", ARRAY_SIZE(stackbuf), NULL, ESP_TASK_TIMER_PRIO, stackbuf, &taskbuf, 1);
     CROSSLOG_ASSERT(task);
 }
 
