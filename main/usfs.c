@@ -5,6 +5,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <sys/param.h>
+#include <usfs.h>
 
 #define CROSSLOG_TAG "main"
 #include <crosslog.h>
@@ -30,10 +31,6 @@ static struct list_node listeners = LIST_INITIAL_VALUE(listeners);
 static uev_t w_enabled;
 static uev_t w_status;
 static uev_t w_samplerate;
-
-static inline uint64_t get_now(void) {
-    return (uint64_t)MAX(0, esp_timer_get_time());
-}
 
 static void usfs_task_fn(void *unused) {
     int rc;
@@ -104,14 +101,14 @@ static void usfs_task_fn(void *unused) {
         }
 
         uintptr_t datacnt = 0;
-        uint64_t datatime = get_now();
+        uint64_t datatime = usfs_get_us();
 
         while (atomic_load(&logging_enabled)) {
             uint8_t event_status;
             uint8_t alg_status;
             uint8_t sensor_status;
             uint8_t error_reg;
-            uint8_t data_raw[50];
+            uint8_t data_raw[EM7180_RAWDATA_SZ];
 
             rc = em7180_get_event_status(&em7180, &event_status);
             if (rc) {
@@ -164,7 +161,7 @@ static void usfs_task_fn(void *unused) {
                 continue;
             }
 
-            uint64_t now = get_now();
+            uint64_t now = usfs_get_us();
 
             // calculate samplerate
             datacnt++;
