@@ -141,7 +141,7 @@ int init_mdns(uev_ctx_t *uev, struct mqtt_ctx *ctx) {
     ESP_ERROR_CHECK( mdns_instance_name_set("imulogger") );
     ESP_ERROR_CHECK( mdns_service_add("FTP", "_ftp", "_tcp", 21, NULL, 0) );
 
-    xrc = xTaskCreate(mdns_task, "mdns_query", 4096, ctx, ESP_TASK_MAIN_PRIO, NULL);
+    xrc = xTaskCreatePinnedToCore(mdns_task, "mdns_query", 4096, ctx, ESP_TASK_MAIN_PRIO, NULL, 0);
     if (xrc != pdPASS) {
         uev_event_stop(&ctx->w_resolved);
         return -1;
