@@ -7,6 +7,11 @@
 #include <sys/param.h>
 #include <usfs.h>
 
+#ifdef CONFIG_IMULOGGER_SENTRAL_PASSTHROUGH
+#include <usfs/bmp280.h>
+#include <inv_mpu.h>
+#endif
+
 #define CROSSLOG_TAG "main"
 #include <crosslog.h>
 
@@ -26,11 +31,254 @@ static atomic_char imu_status;
 static atomic_uint samplerate;
 static struct crossi2c_bus i2cbus;
 static struct em7180 em7180;
+#ifdef CONFIG_IMULOGGER_SENTRAL_PASSTHROUGH
+static struct bmp280_dev bmp280;
+static struct mpu_state_s mpu9250;
+#endif
 
 static struct list_node listeners = LIST_INITIAL_VALUE(listeners);
 static uev_t w_enabled;
 static uev_t w_status;
 static uev_t w_samplerate;
+
+static int usfs_init(void) {
+    int rc;
+
+#ifdef CONFIG_IMULOGGER_SENTRAL_PASSTHROUGH
+    int8_t brc;
+    struct bmp280_config conf;
+
+    rc = usfs_bmp280_create(&bmp280, &i2cbus);
+    if (rc) {
+        CROSSLOGE("can't create bmp280");
+        return -1;
+    }
+
+    rc = mpu_create(&mpu9250, MPU_TYPE_MPU6500, MAG_TYPE_AK8963, &i2cbus);
+    if (rc) {
+        CROSSLOGE("can't create mpu9250");
+        return -1;
+    }
+
+    rc = em7180_reset_request(&em7180);
+    if (rc) {
+        CROSSLOGE("can't reset em7180");
+        return -1;
+    }
+
+    rc = em7180_set_run_mode(&em7180, false);
+    if (rc) {
+        CROSSLOGE("can't disable em7180 run mode");
+        return -1;
+    }
+
+    rc = em7180_passthrough_enter(&em7180);
+    if (rc) {
+        CROSSLOGE("can't enter em7180 passthrough mode");
+        return -1;
+    }
+
+    brc = bmp280_init(&bmp280);
+    if (brc != BMP280_OK) {
+        CROSSLOGE("bmp280_init: %d", brc);
+        return -1;
+    }
+
+    brc = bmp280_get_config(&conf, &bmp280);
+    if (brc != BMP280_OK) {
+        CROSSLOGE("bmp280_get_config: %d", brc);
+        return -1;
+    }
+
+    conf.filter = BMP280_FILTER_COEFF_16;
+    conf.os_temp = BMP280_OS_2X;
+    conf.os_pres = BMP280_OS_16X;
+    conf.odr = BMP280_ODR_0_5_MS;
+
+    brc = bmp280_set_config(&conf, &bmp280);
+    if (brc != BMP280_OK) {
+        CROSSLOGE("bmp280_set_config: %d", brc);
+        return -1;
+    }
+
+    brc = bmp280_set_power_mode(BMP280_NORMAL_MODE, &bmp280);
+    if (brc != BMP280_OK) {
+        CROSSLOGE("bmp280_set_power_mode: %d", brc);
+        return -1;
+    }
+
+    rc = mpu_init(&mpu9250);
+    if (rc) {
+        CROSSLOGE("can't init mpu9250");
+        return -1;
+    }
+
+    rc = mpu_set_sensors(&mpu9250, INV_XYZ_GYRO | INV_XYZ_ACCEL | INV_XYZ_COMPASS);
+    if (rc) {
+        CROSSLOGE("mpu_set_sensors failed");
+        return -1;
+    }
+
+    rc = mpu_set_sample_rate(&mpu9250, 200);
+    if (rc) {
+        CROSSLOGE("mpu_set_sample_rate failed");
+        return -1;
+    }
+
+    rc = mpu_set_accel_fsr(&mpu9250, 8);
+    if (rc) {
+        CROSSLOGE("mpu_set_accel_fsr failed");
+        return -1;
+    }
+
+    rc = mpu_set_gyro_fsr(&mpu9250, 2000);
+    if (rc) {
+        CROSSLOGE("mpu_set_gyro_fsr failed");
+        return -1;
+    }
+#else
+    rc = em7180_init(&em7180);
+    if (rc) {
+        CROSSLOGE("em7180_init failed");
+        return -1;
+    }
+#endif
+
+    return 0;
+}
+
+static int usfs_write_hdr(FILE *f) {
+#ifdef CONFIG_IMULOGGER_SENTRAL_PASSTHROUGH
+    struct mpu_cfg_dump cfg;
+
+    mpu_get_cfg(&mpu9250, &cfg);
+
+    if (fwrite(&cfg, sizeof(cfg), 1, f)!= 1) {
+        CROSSLOGE("can't write mpu cfg");
+        return -1;
+    }
+
+    if (fwrite(&bmp280.calib_param, sizeof(bmp280.calib_param), 1, f)!= 1) {
+        CROSSLOGE("can't write bmp cfg");
+        return -1;
+    }
+
+#else
+    // nothing to do
+#endif
+
+    return 0;
+}
+
+static inline __attribute__((always_inline)) int usfs_getwrite_sample(FILE *f, uint64_t *ptime) {
+    int rc;
+
+#ifdef CONFIG_IMULOGGER_SENTRAL_PASSTHROUGH
+    int8_t brc;
+    uint8_t data[USFS_TOTAL_SAMPLESZ];
+
+    rc = mpu_get_all_data(&mpu9250, &data[0], (uint64_t*)&data[MPU_RAWSZ]);
+    if (rc) {
+        CROSSLOGE("mpu_get_all_data failed");
+        return -1;
+    }
+
+    brc = bmp280_get_raw_data(&data[MPU_SAMPLESZ], &bmp280);
+    if (brc != BMP280_OK) {
+        CROSSLOGE("bmp280_get_raw_data failed");
+        return -1;
+    }
+
+    *ptime = usfs_get_us();
+    *((uint64_t*)&data[MPU_SAMPLESZ + BMP_RAWSZ]) = *ptime;
+
+    if (fwrite(data, USFS_TOTAL_SAMPLESZ, 1, f) != 1) {
+        CROSSLOGE("can't write data to file");
+        return -1;
+    }
+#else
+    uint8_t event_status;
+    uint8_t alg_status;
+    uint8_t sensor_status;
+    uint8_t error_reg;
+    uint8_t data_raw[EM7180_RAWDATA_SZ];
+
+    rc = em7180_get_event_status(&em7180, &event_status);
+    if (rc) {
+        CROSSLOGE("Unable to get event status (err %d)", rc);
+        return -1;
+    }
+
+    // don't read any data if the error flag is set
+    if (event_status & EM7180_EVENT_ERROR) {
+        rc = em7180_get_error_register(&em7180, &error_reg);
+        if (rc) {
+            CROSSLOGE("Unable to get error register (err %d)", rc);
+            return -1;
+        }
+
+        em7180_print_error((enum em7180_error)error_reg);
+        return -1;
+    }
+
+    // update the current algorithm status
+    rc = em7180_get_algorithm_status(&em7180, &alg_status);
+    if (rc) {
+        CROSSLOGE("Unable to get algorithm status (err %d)", rc);
+        return -1;
+    }
+    uint8_t alg_status_prev = atomic_exchange(&imu_status, alg_status);
+    if (alg_status_prev != alg_status) {
+        uev_event_post(&w_status);
+    }
+
+    // print any sensor communication errors
+    rc = em7180_get_sensor_status(&em7180, &sensor_status);
+    if (rc) {
+        CROSSLOGE("Unable to get sensor status (err %d)", rc);
+        return -1;
+    }
+    if (sensor_status) {
+        em7180_print_sensor_status(sensor_status);
+    }
+
+    // if there are no events, don't do anything
+    if (!event_status) {
+        return -2;
+    }
+
+    // get all sensor data
+    rc = em7180_get_data_all_raw(&em7180, data_raw);
+    if (rc) {
+        CROSSLOGE("Unable to get raw data (err %d)", rc);
+        return -1;
+    }
+
+    *ptime = usfs_get_us();
+
+    // write time
+    if (fwrite(ptime, sizeof(*ptime), 1, f) != 1) {
+        CROSSLOGE("can't write time");
+    }
+
+    // write alg status
+    if (fwrite(&alg_status, sizeof(alg_status), 1, f) != 1) {
+        CROSSLOGE("can't algorithm status");
+    }
+
+    // write event status
+    if (fwrite(&event_status, sizeof(event_status), 1, f) != 1) {
+        CROSSLOGE("can't event status");
+    }
+
+    // write sensor data
+    if (fwrite(data_raw, sizeof(data_raw), 1, f) != 1) {
+        CROSSLOGE("can't write data");
+    }
+#endif
+
+    return 0;
+}
 
 static void usfs_task_fn(void *unused) {
     int rc;
@@ -58,7 +306,7 @@ static void usfs_task_fn(void *unused) {
     rc = em7180_create(&em7180, &i2cbus);
     CROSSLOG_ASSERT(rc == 0);
 
-    rc = em7180_init(&em7180);
+    rc = usfs_init();
     CROSSLOG_ASSERT(rc == 0);
 
     CROSSLOGI("USFS initialized");
@@ -100,96 +348,28 @@ static void usfs_task_fn(void *unused) {
             goto stop_unmount;
         }
 
+        rc = usfs_write_hdr(f);
+        if (rc) {
+            CROSSLOGE("can't write hdr");
+            goto stop_unmount;
+        }
+
         uintptr_t datacnt = 0;
         uint64_t datatime = usfs_get_us();
 
         while (atomic_load(&logging_enabled)) {
-            uint8_t event_status;
-            uint8_t alg_status;
-            uint8_t sensor_status;
-            uint8_t error_reg;
-            uint8_t data_raw[EM7180_RAWDATA_SZ];
+            uint64_t sampletime;
 
-            rc = em7180_get_event_status(&em7180, &event_status);
-            if (rc) {
-                CROSSLOGE("Unable to get event status (err %d)", rc);
-                continue;
-            }
-
-            // don't read any data if the error flag is set
-            if (event_status & EM7180_EVENT_ERROR) {
-                rc = em7180_get_error_register(&em7180, &error_reg);
-                if (rc) {
-                    CROSSLOGE("Unable to get error register (err %d)", rc);
-                    continue;
-                }
-
-                em7180_print_error((enum em7180_error)error_reg);
-                continue;
-            }
-
-            // update the current algorithm status
-            rc = em7180_get_algorithm_status(&em7180, &alg_status);
-            if (rc) {
-                CROSSLOGE("Unable to get algorithm status (err %d)", rc);
-                continue;
-            }
-            uint8_t alg_status_prev = atomic_exchange(&imu_status, alg_status);
-            if (alg_status_prev != alg_status) {
-                uev_event_post(&w_status);
-            }
-
-            // print any sensor communication errors
-            rc = em7180_get_sensor_status(&em7180, &sensor_status);
-            if (rc) {
-                CROSSLOGE("Unable to get sensor status (err %d)", rc);
-                continue;
-            }
-            if (sensor_status) {
-                em7180_print_sensor_status(sensor_status);
-            }
-
-            // if there are no events, don't do anything
-            if (!event_status) {
-                continue;
-            }
-
-            // get all sensor data
-            rc = em7180_get_data_all_raw(&em7180, data_raw);
-            if (rc) {
-                CROSSLOGE("Unable to get raw data (err %d)", rc);
-                continue;
-            }
-
-            uint64_t now = usfs_get_us();
+            rc = usfs_getwrite_sample(f, &sampletime);
+            if (rc) continue;
 
             // calculate samplerate
             datacnt++;
-            if (now - datatime >= 10 * 1000 * 1000) {
+            if (sampletime - datatime >= 10 * 1000 * 1000) {
                 atomic_store(&samplerate, datacnt);
                 datacnt = 0;
-                datatime = now;
+                datatime = sampletime;
                 uev_event_post(&w_samplerate);
-            }
-
-            // write time
-            if (fwrite(&now, sizeof(now), 1, f) != 1) {
-                CROSSLOGE("can't write time");
-            }
-
-            // write alg status
-            if (fwrite(&alg_status, sizeof(alg_status), 1, f) != 1) {
-                CROSSLOGE("can't algorithm status");
-            }
-
-            // write event status
-            if (fwrite(&event_status, sizeof(event_status), 1, f) != 1) {
-                CROSSLOGE("can't event status");
-            }
-
-            // write sensor data
-            if (fwrite(data_raw, sizeof(data_raw), 1, f) != 1) {
-                CROSSLOGE("can't write data");
             }
         }
 

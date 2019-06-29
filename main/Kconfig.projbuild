@@ -1,0 +1,6 @@
+menu "imulogger config"
+
+config IMULOGGER_SENTRAL_PASSTHROUGH
+    bool "use sentral passthrough mode"
+
+endmenu
