@@ -42,6 +42,8 @@ uint8_t usfs_status(void);
 unsigned int usfs_samplerate(void);
 int usfs_set_filename(const char *new_filename, size_t new_filename_len);
 int ufsfs_get_filename(char *buf, size_t bufsz, size_t *poutlen);
+bool usfs_is_broadcast(void);
+void usfs_set_broadcast(bool broadcast);
 void usfs_listener_add(struct usfs_listener *listener);
 void usfs_listener_del(struct usfs_listener *listener);
 

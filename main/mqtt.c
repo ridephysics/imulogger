@@ -11,6 +11,7 @@ enum imucmd {
     IMUCMD_IMUSTATUS = 0x03,
     IMUCMD_SAMPLERATE = 0x04,
     IMUCMD_SDCARD = 0x05,
+    IMUCMD_BROADCAST = 0x06,
 };
 
 #define TOPIC_CTRL "/imulogger/ctrl"
@@ -118,11 +119,27 @@ static int send_sdcard(struct mqtt_ctx *ctx) {
     return 0;
 }
 
+static int send_broadcast(struct mqtt_ctx *ctx, uint8_t broadcast) {
+    enum MQTTErrors merr;
+
+    outbuf[0] = IMUCMD_BROADCAST;
+    outbuf[1] = broadcast;
+
+    merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 2, MQTT_PUBLISH_QOS_0);
+    if (merr != MQTT_OK) {
+        CROSSLOGE("publishing broadcast failed: %s", mqtt_error_str(merr));
+        return -1;
+    }
+
+    return 0;
+}
+
 static void send_fullreport(struct mqtt_ctx *ctx) {
     send_filename(ctx);
     send_imustatus(ctx, usfs_status());
     send_enabled(ctx, usfs_is_enabled());
     send_samplerate(ctx, usfs_samplerate());
+    send_broadcast(ctx, usfs_is_broadcast());
     send_sdcard(ctx);
 }
 
@@ -147,6 +164,17 @@ static int set_enabled(struct mqtt_ctx *ctx, uint8_t enable) {
     usfs_set_enabled(!!enable);
 
     return 0;
+}
+
+static int set_broadcast(struct mqtt_ctx *ctx, uint8_t broadcast) {
+    if (broadcast & ~0x01) {
+        CROSSLOGE("broadcast must be either 0x00 or 0x01, not 0x%02x", broadcast);
+        return -1;
+    }
+
+    usfs_set_broadcast(!!broadcast);
+
+    return send_broadcast(ctx, !!broadcast);
 }
 
 static void publish_callback(void **pctx, struct mqtt_response_publish *pub)
@@ -221,6 +249,19 @@ static void publish_callback(void **pctx, struct mqtt_response_publish *pub)
                 sdcard_refed = 0;
                 send_sdcard(ctx);
             }
+            break;
+        }
+
+        case IMUCMD_BROADCAST: {
+            if (msgsz != 2) {
+                CROSSLOGE("broadcast request has invalid size: %u", msgsz);
+                dumppub(pub);
+                return;
+            }
+
+            uint8_t broadcast = msg[1];
+            CROSSLOGD("broadcast=0x%02x requested", broadcast);
+            set_broadcast(ctx, broadcast);
             break;
         }
 

@@ -29,6 +29,7 @@ static char imu_filename[256];
 static atomic_bool logging_enabled;
 static atomic_char imu_status;
 static atomic_uint samplerate;
+static atomic_bool do_broadcast;
 static struct crossi2c_bus i2cbus;
 static struct em7180 em7180;
 #ifdef CONFIG_IMULOGGER_SENTRAL_PASSTHROUGH
@@ -40,6 +41,36 @@ static struct list_node listeners = LIST_INITIAL_VALUE(listeners);
 static uev_t w_enabled;
 static uev_t w_status;
 static uev_t w_samplerate;
+
+static int sockfd;
+static struct sockaddr_in sa;
+
+static int usfs_write(FILE *f, const void *data, size_t len) {
+    int rc;
+
+    if (f) {
+        if (fwrite(data, len, 1, f) != 1) {
+            CROSSLOGE("fwrite failed");
+            return -1;
+        }
+    }
+    else {
+        rc = sendto(sockfd, data, len, 0, (struct sockaddr *) &sa, sizeof(sa));
+        if (rc < 0) {
+            if (errno != ENOMEM) {
+                CROSSLOG_ERRNO("sendto");
+            }
+            return -1;
+        }
+
+        if (rc != len) {
+            CROSSLOGE("short write");
+            return -1;
+        }
+    }
+
+    return 0;
+}
 
 static int usfs_init(void) {
     int rc;
@@ -149,17 +180,16 @@ static int usfs_init(void) {
 
 static int usfs_write_hdr(FILE *f) {
 #ifdef CONFIG_IMULOGGER_SENTRAL_PASSTHROUGH
-    struct mpu_cfg_dump cfg;
+    struct {
+        struct mpu_cfg_dump cfg;
+        struct bmp280_calib_param calib_param;
+    } __attribute__((packed)) data;
 
-    mpu_get_cfg(&mpu9250, &cfg);
+    mpu_get_cfg(&mpu9250, &data.cfg);
+    memcpy(&data.calib_param, &bmp280.calib_param, sizeof(data.calib_param));
 
-    if (fwrite(&cfg, sizeof(cfg), 1, f)!= 1) {
-        CROSSLOGE("can't write mpu cfg");
-        return -1;
-    }
-
-    if (fwrite(&bmp280.calib_param, sizeof(bmp280.calib_param), 1, f)!= 1) {
-        CROSSLOGE("can't write bmp cfg");
+    if (usfs_write(f, &data, sizeof(data))) {
+        CROSSLOGE("can't write header");
         return -1;
     }
 
@@ -192,25 +222,28 @@ static inline __attribute__((always_inline)) int usfs_getwrite_sample(FILE *f, u
     *ptime = usfs_get_us();
     *((uint64_t*)&data[MPU_SAMPLESZ + BMP_RAWSZ]) = *ptime;
 
-    if (fwrite(data, USFS_TOTAL_SAMPLESZ, 1, f) != 1) {
-        CROSSLOGE("can't write data to file");
+    if (usfs_write(f, data, USFS_TOTAL_SAMPLESZ)) {
         return -1;
     }
 #else
-    uint8_t event_status;
-    uint8_t alg_status;
     uint8_t sensor_status;
     uint8_t error_reg;
-    uint8_t data_raw[EM7180_RAWDATA_SZ];
 
-    rc = em7180_get_event_status(&em7180, &event_status);
+    struct {
+        uint64_t time;
+        uint8_t alg_status;
+        uint8_t event_status;
+        uint8_t data_raw[EM7180_RAWDATA_SZ];
+    } __attribute__((packed)) data;
+
+    rc = em7180_get_event_status(&em7180, &data.event_status);
     if (rc) {
         CROSSLOGE("Unable to get event status (err %d)", rc);
         return -1;
     }
 
     // don't read any data if the error flag is set
-    if (event_status & EM7180_EVENT_ERROR) {
+    if (data.event_status & EM7180_EVENT_ERROR) {
         rc = em7180_get_error_register(&em7180, &error_reg);
         if (rc) {
             CROSSLOGE("Unable to get error register (err %d)", rc);
@@ -222,13 +255,13 @@ static inline __attribute__((always_inline)) int usfs_getwrite_sample(FILE *f, u
     }
 
     // update the current algorithm status
-    rc = em7180_get_algorithm_status(&em7180, &alg_status);
+    rc = em7180_get_algorithm_status(&em7180, &data.alg_status);
     if (rc) {
         CROSSLOGE("Unable to get algorithm status (err %d)", rc);
         return -1;
     }
-    uint8_t alg_status_prev = atomic_exchange(&imu_status, alg_status);
-    if (alg_status_prev != alg_status) {
+    uint8_t alg_status_prev = atomic_exchange(&imu_status, data.alg_status);
+    if (alg_status_prev != data.alg_status) {
         uev_event_post(&w_status);
     }
 
@@ -243,37 +276,23 @@ static inline __attribute__((always_inline)) int usfs_getwrite_sample(FILE *f, u
     }
 
     // if there are no events, don't do anything
-    if (!event_status) {
+    if (!data.event_status) {
         return -2;
     }
 
     // get all sensor data
-    rc = em7180_get_data_all_raw(&em7180, data_raw);
+    rc = em7180_get_data_all_raw(&em7180, data.data_raw);
     if (rc) {
         CROSSLOGE("Unable to get raw data (err %d)", rc);
         return -1;
     }
 
-    *ptime = usfs_get_us();
+    data.time = usfs_get_us();
+    *ptime = data.time;
 
     // write time
-    if (fwrite(ptime, sizeof(*ptime), 1, f) != 1) {
-        CROSSLOGE("can't write time");
-    }
-
-    // write alg status
-    if (fwrite(&alg_status, sizeof(alg_status), 1, f) != 1) {
-        CROSSLOGE("can't algorithm status");
-    }
-
-    // write event status
-    if (fwrite(&event_status, sizeof(event_status), 1, f) != 1) {
-        CROSSLOGE("can't event status");
-    }
-
-    // write sensor data
-    if (fwrite(data_raw, sizeof(data_raw), 1, f) != 1) {
-        CROSSLOGE("can't write data");
+    if (usfs_write(f, &data, sizeof(data))) {
+        return -1;
     }
 #endif
 
@@ -283,6 +302,7 @@ static inline __attribute__((always_inline)) int usfs_getwrite_sample(FILE *f, u
 static void usfs_task_fn(void *unused) {
     int rc;
     esp_err_t erc;
+    int opt;
     i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
         .sda_io_num = 18,
@@ -309,9 +329,29 @@ static void usfs_task_fn(void *unused) {
     rc = usfs_init();
     CROSSLOG_ASSERT(rc == 0);
 
+    bzero(&sa, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_addr.s_addr = inet_addr("255.255.255.255");
+    sa.sin_port = htons(8888);
+
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        CROSSLOG_ERRNO("socket");
+        CROSSLOG_ASSERT(0);
+    }
+
+    opt = 1;
+    rc = setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
+    if (rc) {
+        CROSSLOG_ERRNO("setsockopt");
+        CROSSLOG_ASSERT(0);
+    }
+
     CROSSLOGI("USFS initialized");
 
     for (;;) {
+        FILE *f = NULL;
+
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         if (!atomic_load(&logging_enabled))
@@ -319,33 +359,35 @@ static void usfs_task_fn(void *unused) {
 
         CROSSLOGD("logging started");
 
-        rc = sdcard_ref();
-        if (rc) {
-            CROSSLOGE("can't ref sdcard");
-            goto stop_notify;
-        }
+        if (!atomic_load(&do_broadcast)) {
+            rc = sdcard_ref();
+            if (rc) {
+                CROSSLOGE("can't ref sdcard");
+                goto stop_notify;
+            }
 
-        xSemaphoreTake(lock, portMAX_DELAY);
-        struct stat sb;
+            xSemaphoreTake(lock, portMAX_DELAY);
+            struct stat sb;
 
-        rc = stat(imu_filename, &sb);
-        if (rc == 0) {
-            CROSSLOGE("file does already exist");
+            rc = stat(imu_filename, &sb);
+            if (rc == 0) {
+                CROSSLOGE("file does already exist");
+                xSemaphoreGive(lock);
+                goto stop_unmount;
+            }
+
+            if (errno != ENOENT) {
+                CROSSLOG_ERRNO("stat");
+                xSemaphoreGive(lock);
+                goto stop_unmount;
+            }
+
+            f = fopen(imu_filename, "w");
             xSemaphoreGive(lock);
-            goto stop_unmount;
-        }
-
-        if (errno != ENOENT) {
-            CROSSLOG_ERRNO("stat");
-            xSemaphoreGive(lock);
-            goto stop_unmount;
-        }
-
-        FILE *f = fopen(imu_filename, "w");
-        xSemaphoreGive(lock);
-        if (!f) {
-            CROSSLOGE("fopen failed");
-            goto stop_unmount;
+            if (!f) {
+                CROSSLOGE("fopen failed");
+                goto stop_unmount;
+            }
         }
 
         rc = usfs_write_hdr(f);
@@ -373,7 +415,8 @@ static void usfs_task_fn(void *unused) {
             }
         }
 
-        fclose(f);
+        if (f)
+            fclose(f);
 stop_unmount:
         sdcard_unref();
 stop_notify:
@@ -434,6 +477,7 @@ void init_usfs(uev_ctx_t *uev) {
     atomic_init(&logging_enabled, false);
     atomic_init(&imu_status, 0x00);
     atomic_init(&samplerate, 0);
+    atomic_init(&do_broadcast, false);
 
     rc = uev_event_init(uev, &w_enabled, ev_enabled_cb, NULL);
     CROSSLOG_ASSERT(rc == 0);
@@ -504,6 +548,14 @@ unlock:
     xSemaphoreGive(lock);
 
     return ret;
+}
+
+bool usfs_is_broadcast(void) {
+    return atomic_load(&do_broadcast);
+}
+
+void usfs_set_broadcast(bool broadcast) {
+    atomic_store(&do_broadcast, broadcast);
 }
 
 void usfs_listener_add(struct usfs_listener *listener) {
