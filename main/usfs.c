@@ -418,7 +418,8 @@ static void usfs_task_fn(void *unused) {
         if (f)
             fclose(f);
 stop_unmount:
-        sdcard_unref();
+        if (f)
+            sdcard_unref();
 stop_notify:
         atomic_store(&logging_enabled, false);
         uev_event_post(&w_enabled);
