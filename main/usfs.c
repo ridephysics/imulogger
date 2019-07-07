@@ -385,7 +385,7 @@ static void usfs_task_fn(void *unused) {
             f = fopen(imu_filename, "w");
             xSemaphoreGive(lock);
             if (!f) {
-                CROSSLOGE("fopen failed");
+                CROSSLOG_ERRNO("fopen");
                 goto stop_unmount;
             }
         }
