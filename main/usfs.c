@@ -393,7 +393,7 @@ static void usfs_task_fn(void *unused) {
         rc = usfs_write_hdr(f);
         if (rc) {
             CROSSLOGE("can't write hdr");
-            goto stop_unmount;
+            goto close_file;
         }
 
         uintptr_t datacnt = 0;
@@ -415,6 +415,7 @@ static void usfs_task_fn(void *unused) {
             }
         }
 
+close_file:
         if (f)
             fclose(f);
 stop_unmount:
