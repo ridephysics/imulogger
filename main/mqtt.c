@@ -395,6 +395,10 @@ static enum MQTTErrors reconnect_client(struct mqtt_client *client, void **_pctx
     struct mqtt_ctx *ctx = *_pctx;
     int rc;
     int fd;
+    struct timeval tv;
+
+    tv.tv_sec = 10;
+    tv.tv_usec = 0;
 
     CROSSLOGI("(re)connect mqtt client");
 
@@ -438,6 +442,20 @@ static enum MQTTErrors reconnect_client(struct mqtt_client *client, void **_pctx
     rc = fcntl(fd, F_SETFL, rc | O_NONBLOCK);
     if (rc < 0) {
         CROSSLOG_ERRNO("fcntl:SETFL");
+        close(fd);
+        return MQTT_ERROR_SOCKET_ERROR;
+    }
+
+    rc = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    if (rc < 0) {
+        CROSSLOG_ERRNO("setsockopt");
+        close(fd);
+        return MQTT_ERROR_SOCKET_ERROR;
+    }
+
+    rc = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    if (rc < 0) {
+        CROSSLOG_ERRNO("setsockopt");
         close(fd);
         return MQTT_ERROR_SOCKET_ERROR;
     }
