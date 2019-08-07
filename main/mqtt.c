@@ -19,6 +19,7 @@ enum imucmd {
 
 static uint8_t outbuf[256];
 static bool sdcard_refed = 0;
+static const char *client_id = "subscribing_client";
 
 static bool strequal(const void *s1, size_t s1len, const char *s2) {
     size_t s2len = strlen(s2);
@@ -297,7 +298,7 @@ static enum MQTTErrors on_connected(struct mqtt_ctx *ctx, int fd) {
     }
 
     /* Send connection request to the broker. */
-    merr = mqtt_connect(&ctx->client, "subscribing_client", NULL, NULL, 0, NULL, NULL, 0, 400);
+    merr = mqtt_connect(&ctx->client, client_id, strlen(client_id), NULL, NULL, 0, NULL, NULL, 0, 400);
     if (merr != MQTT_OK) {
         CROSSLOGE("mqtt_connect: %s", mqtt_error_str(merr));
         close(fd);

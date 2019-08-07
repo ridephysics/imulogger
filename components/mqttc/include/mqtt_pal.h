@@ -20,6 +20,7 @@ typedef void* mqtt_pal_mutex_t;
 #define MQTT_PAL_MUTEX_LOCK(mtx_ptr) (void)(mtx_ptr)
 #define MQTT_PAL_MUTEX_UNLOCK(mtx_ptr) (void)(mtx_ptr)
 
+#define MQTT_PAL_INVALID_SOCKET_HANDLE (-1)
 typedef int mqtt_pal_socket_handle;
 typedef uev_ctx_t mqtt_pal_ev_t;
 typedef void (*mqtt_pal_timer_cb_t)(void*);
