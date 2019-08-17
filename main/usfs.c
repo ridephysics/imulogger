@@ -23,6 +23,10 @@ static volatile TaskHandle_t task = NULL;
 static StaticTask_t taskbuf;
 static StackType_t stackbuf[4096];
 
+static volatile TaskHandle_t task_write = NULL;
+static StaticTask_t taskbuf_write;
+static StackType_t stackbuf_write[4096];
+
 static StaticSemaphore_t lockbuf;
 static SemaphoreHandle_t lock = NULL;
 static char imu_filename[256];
@@ -36,6 +40,15 @@ static struct em7180 em7180;
 static struct bmp280_dev bmp280;
 static struct mpu_state_s mpu9250;
 #endif
+
+#define SAMPLE_QUEUE_LEN 512
+static uint8_t sample_queue_storage[USFS_TOTAL_SAMPLESZ * SAMPLE_QUEUE_LEN];
+static StaticQueue_t sample_queue_buf;
+static QueueHandle_t sample_queue = NULL;
+
+static FILE* volatile current_file = NULL;
+static StaticSemaphore_t file_lockbuf;
+static SemaphoreHandle_t file_lock = NULL;
 
 static struct list_node listeners = LIST_INITIAL_VALUE(listeners);
 static uev_t w_enabled;
@@ -206,6 +219,7 @@ static inline __attribute__((always_inline)) int usfs_getwrite_sample(FILE *f, u
 #ifdef CONFIG_IMULOGGER_SENTRAL_PASSTHROUGH
     int8_t brc;
     uint8_t data[USFS_TOTAL_SAMPLESZ];
+    BaseType_t xrc;
 
     rc = mpu_get_all_data(&mpu9250, &data[0], (uint64_t*)&data[MPU_RAWSZ]);
     if (rc) {
@@ -222,7 +236,13 @@ static inline __attribute__((always_inline)) int usfs_getwrite_sample(FILE *f, u
     *ptime = usfs_get_us();
     *((uint64_t*)&data[MPU_SAMPLESZ + BMP_RAWSZ]) = *ptime;
 
-    if (usfs_write(f, data, USFS_TOTAL_SAMPLESZ)) {
+    if (uxQueueSpacesAvailable(sample_queue) < 1) {
+        xQueueReset(sample_queue);
+    }
+
+    xrc = xQueueSend(sample_queue, data, portMAX_DELAY);
+    if (xrc != pdTRUE) {
+        CROSSLOGE("xQueueSend reported full");
         return -1;
     }
 #else
@@ -388,6 +408,10 @@ static void usfs_task_fn(void *unused) {
                 CROSSLOG_ERRNO("fopen");
                 goto stop_unmount;
             }
+
+            xSemaphoreTake(file_lock, portMAX_DELAY);
+            current_file = f;
+            xSemaphoreGive(file_lock);
         }
 
         rc = usfs_write_hdr(f);
@@ -416,8 +440,14 @@ static void usfs_task_fn(void *unused) {
         }
 
 close_file:
-        if (f)
+        if (f) {
+            xQueueReset(sample_queue);
+            xSemaphoreTake(file_lock, portMAX_DELAY);
+            current_file = NULL;
+            xSemaphoreGive(file_lock);
+
             fclose(f);
+        }
 stop_unmount:
         if (f)
             sdcard_unref();
@@ -467,6 +497,26 @@ static void ev_samplerate_cb(uev_t *w, void *arg, int events) {
     }
 }
 
+static void usfs_task_write_fn(void *unused) {
+    BaseType_t xrc;
+    uint8_t buf[USFS_TOTAL_SAMPLESZ];
+
+    for (;;) {
+        xrc = xQueueReceive(sample_queue, buf, portMAX_DELAY);
+        if (xrc != pdTRUE)
+            continue;
+
+        xSemaphoreTake(file_lock, portMAX_DELAY);
+        if (current_file) {
+            usfs_write(current_file, buf, sizeof(buf));
+        }
+        xSemaphoreGive(file_lock);
+    }
+
+    task_write = NULL;
+    vTaskDelete(NULL);
+}
+
 void init_usfs(uev_ctx_t *uev) {
     int rc;
 
@@ -475,6 +525,13 @@ void init_usfs(uev_ctx_t *uev) {
 
     lock = xSemaphoreCreateMutexStatic(&lockbuf);
     CROSSLOG_ASSERT(lock);
+
+    file_lock = xSemaphoreCreateMutexStatic(&file_lockbuf);
+    CROSSLOG_ASSERT(file_lock);
+
+    sample_queue = xQueueCreateStatic(SAMPLE_QUEUE_LEN, USFS_TOTAL_SAMPLESZ,
+        sample_queue_storage, &sample_queue_buf);
+    assert(sample_queue);
 
     atomic_init(&logging_enabled, false);
     atomic_init(&imu_status, 0x00);
@@ -490,7 +547,14 @@ void init_usfs(uev_ctx_t *uev) {
     rc = uev_event_init(uev, &w_samplerate, ev_samplerate_cb, NULL);
     CROSSLOG_ASSERT(rc == 0);
 
-    task = xTaskCreateStaticPinnedToCore(usfs_task_fn, "usfs", ARRAY_SIZE(stackbuf), NULL, ESP_TASK_TIMER_PRIO, stackbuf, &taskbuf, 1);
+    task = xTaskCreateStaticPinnedToCore(usfs_task_write_fn, "usfs_write",
+        ARRAY_SIZE(stackbuf_write), NULL, ESP_TASK_TIMER_PRIO,
+        stackbuf_write, &taskbuf_write, 1);
+    CROSSLOG_ASSERT(task);
+
+    task = xTaskCreateStaticPinnedToCore(usfs_task_fn, "usfs",
+        ARRAY_SIZE(stackbuf), NULL, ESP_TASK_TIMER_PRIO,
+        stackbuf, &taskbuf, 1);
     CROSSLOG_ASSERT(task);
 }
 
