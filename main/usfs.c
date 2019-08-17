@@ -134,9 +134,9 @@ static int usfs_init(void) {
         return -1;
     }
 
-    conf.filter = BMP280_FILTER_COEFF_16;
-    conf.os_temp = BMP280_OS_2X;
-    conf.os_pres = BMP280_OS_16X;
+    conf.filter = BMP280_FILTER_OFF;
+    conf.os_temp = BMP280_OS_1X;
+    conf.os_pres = BMP280_OS_4X;
     conf.odr = BMP280_ODR_0_5_MS;
 
     brc = bmp280_set_config(&conf, &bmp280);
