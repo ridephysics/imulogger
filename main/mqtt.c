@@ -298,7 +298,7 @@ static enum MQTTErrors on_connected(struct mqtt_ctx *ctx, int fd) {
     }
 
     /* Send connection request to the broker. */
-    merr = mqtt_connect(&ctx->client, client_id, strlen(client_id), NULL, NULL, 0, NULL, NULL, 0, 400);
+    merr = mqtt_connect(&ctx->client, client_id, strlen(client_id), NULL, NULL, 0, NULL, 0, NULL, 0, 400);
     if (merr != MQTT_OK) {
         CROSSLOGE("mqtt_connect: %s", mqtt_error_str(merr));
         close(fd);
