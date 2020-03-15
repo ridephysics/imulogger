@@ -19,6 +19,8 @@
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #endif
 
+#define BROADCAST_MAGIC_PTR ((void*)0xdeadbeef)
+
 static volatile TaskHandle_t task = NULL;
 static StaticTask_t taskbuf;
 static StackType_t stackbuf[4096];
@@ -61,13 +63,7 @@ static struct sockaddr_in sa;
 static int usfs_write(FILE *f, const void *data, size_t len) {
     int rc;
 
-    if (f) {
-        if (fwrite(data, len, 1, f) != 1) {
-            CROSSLOGE("fwrite failed");
-            return -1;
-        }
-    }
-    else {
+    if (f == BROADCAST_MAGIC_PTR) {
         rc = sendto(sockfd, data, len, 0, (struct sockaddr *) &sa, sizeof(sa));
         if (rc < 0) {
             if (errno != ENOMEM) {
@@ -78,6 +74,12 @@ static int usfs_write(FILE *f, const void *data, size_t len) {
 
         if (rc != len) {
             CROSSLOGE("short write");
+            return -1;
+        }
+    }
+    else if(f) {
+        if (fwrite(data, len, 1, f) != 1) {
+            CROSSLOGE("fwrite failed");
             return -1;
         }
     }
@@ -408,11 +410,14 @@ static void usfs_task_fn(void *unused) {
                 CROSSLOG_ERRNO("fopen");
                 goto stop_unmount;
             }
-
-            xSemaphoreTake(file_lock, portMAX_DELAY);
-            current_file = f;
-            xSemaphoreGive(file_lock);
         }
+        else {
+            f = BROADCAST_MAGIC_PTR;
+        }
+
+        xSemaphoreTake(file_lock, portMAX_DELAY);
+        current_file = f;
+        xSemaphoreGive(file_lock);
 
         rc = usfs_write_hdr(f);
         if (rc) {
@@ -446,10 +451,11 @@ close_file:
             current_file = NULL;
             xSemaphoreGive(file_lock);
 
-            fclose(f);
+            if (f != BROADCAST_MAGIC_PTR)
+                fclose(f);
         }
 stop_unmount:
-        if (f)
+        if (f && f != BROADCAST_MAGIC_PTR)
             sdcard_unref();
 stop_notify:
         atomic_store(&logging_enabled, false);
