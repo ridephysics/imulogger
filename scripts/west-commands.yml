@@ -5,3 +5,9 @@ west-commands:
       - name: fw
         class: Fw
         help: build the firmware
+
+  - file: scripts/west_commands/fw.py
+    commands:
+      - name: iperf
+        class: IPerf
+        help: build iperf

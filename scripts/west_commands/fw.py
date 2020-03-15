@@ -14,17 +14,17 @@ def run_cmd(args, env={}):
     if p.returncode:
         raise subprocess.CalledProcessError(p.returncode, args)
 
-class Fw(WestCommand):
-    def __init__(self):
+class IDFBuild(WestCommand):
+    def __init__(self, cmdname, cmddesc, projectdir, builddir):
         super().__init__(
-            'fw',
-            'build the firmware',
+            cmdname,
+            cmddesc,
             None,
             accepts_unknown_args=True)
 
         self.top_dir = util.west_topdir()
-        self.build_dir = os.path.join(self.top_dir, 'build/imulogger')
-        self.project_dir = os.path.join(self.top_dir, 'imulogger')
+        self.build_dir = os.path.join(self.top_dir, os.path.join('build', builddir))
+        self.project_dir = os.path.join(self.top_dir, projectdir)
         self.idf_path = os.path.join(self.top_dir, 'external/esp-idf')
         self.extra_component_dirs = [
             os.path.join(self.top_dir, 'components'),
@@ -109,3 +109,11 @@ class Fw(WestCommand):
 
     def do_run(self, args, unknown_args):
         self.run_idfpy(unknown_args)
+
+class Fw(IDFBuild):
+    def __init__(self):
+        super().__init__('fw', 'build the firmware', 'imulogger', 'imulogger')
+
+class IPerf(IDFBuild):
+    def __init__(self):
+        super().__init__('iperf', 'build iperf', 'external/esp-idf/examples/wifi/iperf', 'iperf')
