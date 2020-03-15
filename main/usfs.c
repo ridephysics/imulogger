@@ -312,7 +312,7 @@ static inline __attribute__((always_inline)) int usfs_getwrite_sample(FILE *f, u
     data.time = usfs_get_us();
     *ptime = data.time;
 
-    // write time
+    // write data
     if (usfs_write(f, &data, sizeof(data))) {
         return -1;
     }
