@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+
+import paho.mqtt.subscribe as subscribe
+
+CMDMAP = {
+    0x00: 'IMUCMD_FULLREPORT',
+    0x01: 'IMUCMD_FILENAME',
+    0x02: 'IMUCMD_ENABLED',
+    0x03: 'IMUCMD_IMUSTATUS',
+    0x04: 'IMUCMD_SAMPLERATE',
+    0x05: 'IMUCMD_SDCARD',
+    0x06: 'IMUCMD_BROADCAST',
+}
+
+def print_msg(client, userdata, message):
+    cmd = message.payload[0]
+    print("[%s] %s : %s" % (CMDMAP[cmd], message.topic, message.payload))
+
+subscribe.callback(print_msg, "/imulogger/status", hostname="localhost")

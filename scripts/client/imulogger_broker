@@ -1,0 +1,6 @@
+#!/bin/sh
+
+set -e
+
+avahi-publish -s "imulogger-mqtt-broker" "_imulogger_mqtt_broker._tcp" 1883 &
+exec mosquitto

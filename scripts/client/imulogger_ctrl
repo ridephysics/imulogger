@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+
+import paho.mqtt.publish as publish
+import sys
+
+
+if sys.argv[1] == 'broadcast':
+    if sys.argv[2] == 'on':
+        payload = b'\x06\x01'
+    elif sys.argv[2] == 'off':
+        payload = b'\x06\x00'
+    else:
+        raise Exception()
+
+elif sys.argv[1] == 'enabled':
+    if sys.argv[2] == 'on':
+        payload = b'\x02\x01'
+    elif sys.argv[2] == 'off':
+        payload = b'\x02\x00'
+    else:
+        raise Exception()
+
+elif sys.argv[1] == 'fr':
+    payload = b'\x00'
+
+elif sys.argv[1] == 'sd-ref':
+    payload = b'\x05\x01'
+
+elif sys.argv[1] == 'sd-unref':
+    payload = b'\x05\x00'
+
+else:
+    raise Exception()
+
+publish.single("/imulogger/ctrl", payload, hostname="localhost")
