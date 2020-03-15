@@ -95,7 +95,7 @@ class Fw(WestCommand):
             'BMP280_DIR': os.path.join(self.top_dir, 'external/bmp280'),
         }
         args = [
-            os.path.join(self.idf_path, 'tools/idf.py'),
+            os.path.join(self.project_dir, 'scripts/idfpy_wrapper'),
             '-C', self.project_dir,
             '-B', self.build_dir,
             '-G', 'Ninja',
