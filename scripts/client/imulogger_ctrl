@@ -31,6 +31,9 @@ elif sys.argv[1] == 'sd-ref':
 elif sys.argv[1] == 'sd-unref':
     payload = b'\x05\x00'
 
+elif sys.argv[1] == 'filename':
+    payload = b'\x01' + sys.argv[2].encode()
+
 else:
     raise Exception()
 
