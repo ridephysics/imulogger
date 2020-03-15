@@ -4,11 +4,11 @@ import paho.mqtt.publish as publish
 import sys
 
 
-if sys.argv[1] == 'broadcast':
-    if sys.argv[2] == 'on':
-        payload = b'\x06\x01'
-    elif sys.argv[2] == 'off':
-        payload = b'\x06\x00'
+if sys.argv[1] == 'mode':
+    if sys.argv[2] == 'normal':
+        payload = b'\x06\x00\x00\x00\x00'
+    elif sys.argv[2] == 'broadcast':
+        payload = b'\x06\x01\x00\x00\x00'
     else:
         raise Exception()
 

@@ -35,7 +35,7 @@ static char imu_filename[256];
 static atomic_bool logging_enabled;
 static atomic_char imu_status;
 static atomic_uint samplerate;
-static atomic_bool do_broadcast;
+static atomic_int g_usfs_mode;
 static struct crossi2c_bus i2cbus;
 static struct em7180 em7180;
 #ifdef CONFIG_IMULOGGER_SENTRAL_PASSTHROUGH
@@ -381,7 +381,8 @@ static void usfs_task_fn(void *unused) {
 
         CROSSLOGD("logging started");
 
-        if (!atomic_load(&do_broadcast)) {
+        switch (usfs_get_mode()) {
+        case USFS_MODE_NORMAL:
             rc = sdcard_ref();
             if (rc) {
                 CROSSLOGE("can't ref sdcard");
@@ -410,9 +411,16 @@ static void usfs_task_fn(void *unused) {
                 CROSSLOG_ERRNO("fopen");
                 goto stop_unmount;
             }
-        }
-        else {
+            break;
+
+        case USFS_MODE_BROADCAST:
             f = BROADCAST_MAGIC_PTR;
+            break;
+
+        default:
+            CROSSLOGE("invalid mode");
+            goto stop_notify;
+            break;
         }
 
         xSemaphoreTake(file_lock, portMAX_DELAY);
@@ -542,7 +550,7 @@ void init_usfs(uev_ctx_t *uev) {
     atomic_init(&logging_enabled, false);
     atomic_init(&imu_status, 0x00);
     atomic_init(&samplerate, 0);
-    atomic_init(&do_broadcast, false);
+    atomic_init(&g_usfs_mode, (int)USFS_MODE_NORMAL);
 
     rc = uev_event_init(uev, &w_enabled, ev_enabled_cb, NULL);
     CROSSLOG_ASSERT(rc == 0);
@@ -622,12 +630,12 @@ unlock:
     return ret;
 }
 
-bool usfs_is_broadcast(void) {
-    return atomic_load(&do_broadcast);
+enum usfs_mode usfs_get_mode(void) {
+    return (enum usfs_mode)atomic_load(&g_usfs_mode);
 }
 
-void usfs_set_broadcast(bool broadcast) {
-    atomic_store(&do_broadcast, broadcast);
+void usfs_set_mode(enum usfs_mode mode) {
+    atomic_store(&g_usfs_mode, (int)mode);
 }
 
 void usfs_listener_add(struct usfs_listener *listener) {

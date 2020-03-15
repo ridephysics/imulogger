@@ -11,7 +11,7 @@ enum imucmd {
     IMUCMD_IMUSTATUS = 0x03,
     IMUCMD_SAMPLERATE = 0x04,
     IMUCMD_SDCARD = 0x05,
-    IMUCMD_BROADCAST = 0x06,
+    IMUCMD_MODE = 0x06,
 };
 
 #define TOPIC_CTRL "/imulogger/ctrl"
@@ -120,15 +120,19 @@ static int send_sdcard(struct mqtt_ctx *ctx) {
     return 0;
 }
 
-static int send_broadcast(struct mqtt_ctx *ctx, uint8_t broadcast) {
+static int send_mode(struct mqtt_ctx *ctx, enum usfs_mode _mode) {
     enum MQTTErrors merr;
+    uint32_t mode = (uint32_t)_mode;
 
-    outbuf[0] = IMUCMD_BROADCAST;
-    outbuf[1] = broadcast;
+    outbuf[0] = IMUCMD_MODE;
+    outbuf[1] = mode & 0xff;
+    outbuf[2] = (mode >> 8) & 0xff;
+    outbuf[3] = (mode >> 16) & 0xff;
+    outbuf[4] = (mode >> 24) & 0xff;
 
-    merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 2, MQTT_PUBLISH_QOS_0);
+    merr = mqtt_publish(&ctx->client, TOPIC_STATUS, outbuf, 5, MQTT_PUBLISH_QOS_0);
     if (merr != MQTT_OK) {
-        CROSSLOGE("publishing broadcast failed: %s", mqtt_error_str(merr));
+        CROSSLOGE("publishing mode failed: %s", mqtt_error_str(merr));
         return -1;
     }
 
@@ -140,7 +144,7 @@ static void send_fullreport(struct mqtt_ctx *ctx) {
     send_imustatus(ctx, usfs_status());
     send_enabled(ctx, usfs_is_enabled());
     send_samplerate(ctx, usfs_samplerate());
-    send_broadcast(ctx, usfs_is_broadcast());
+    send_mode(ctx, usfs_get_mode());
     send_sdcard(ctx);
 }
 
@@ -167,15 +171,10 @@ static int set_enabled(struct mqtt_ctx *ctx, uint8_t enable) {
     return 0;
 }
 
-static int set_broadcast(struct mqtt_ctx *ctx, uint8_t broadcast) {
-    if (broadcast & ~0x01) {
-        CROSSLOGE("broadcast must be either 0x00 or 0x01, not 0x%02x", broadcast);
-        return -1;
-    }
+static int set_mode(struct mqtt_ctx *ctx, enum usfs_mode mode) {
+    usfs_set_mode(mode);
 
-    usfs_set_broadcast(!!broadcast);
-
-    return send_broadcast(ctx, !!broadcast);
+    return send_mode(ctx, mode);
 }
 
 static void publish_callback(void **pctx, struct mqtt_response_publish *pub)
@@ -253,16 +252,17 @@ static void publish_callback(void **pctx, struct mqtt_response_publish *pub)
             break;
         }
 
-        case IMUCMD_BROADCAST: {
-            if (msgsz != 2) {
-                CROSSLOGE("broadcast request has invalid size: %u", msgsz);
+        case IMUCMD_MODE: {
+            if (msgsz != 5) {
+                CROSSLOGE("mode request has invalid size: %u", msgsz);
                 dumppub(pub);
                 return;
             }
 
-            uint8_t broadcast = msg[1];
-            CROSSLOGD("broadcast=0x%02x requested", broadcast);
-            set_broadcast(ctx, broadcast);
+            uint32_t _mode = msg[1] | (msg[2] << 8) | (msg[3] << 16) | (msg[4] << 24);
+            enum usfs_mode mode = (enum usfs_mode) _mode;
+            CROSSLOGD("mode=%d requested", mode);
+            set_mode(ctx, mode);
             break;
         }
 

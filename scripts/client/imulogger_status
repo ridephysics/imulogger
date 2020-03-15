@@ -9,7 +9,7 @@ CMDMAP = {
     0x03: 'IMUCMD_IMUSTATUS',
     0x04: 'IMUCMD_SAMPLERATE',
     0x05: 'IMUCMD_SDCARD',
-    0x06: 'IMUCMD_BROADCAST',
+    0x06: 'IMUCMD_MODE',
 }
 
 def print_msg(client, userdata, message):
