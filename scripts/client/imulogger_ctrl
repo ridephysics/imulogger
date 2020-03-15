@@ -9,6 +9,8 @@ if sys.argv[1] == 'mode':
         payload = b'\x06\x00\x00\x00\x00'
     elif sys.argv[2] == 'broadcast':
         payload = b'\x06\x01\x00\x00\x00'
+    elif sys.argv[2] == 'selftest':
+        payload = b'\x06\x02\x00\x00\x00'
     else:
         raise Exception()
 

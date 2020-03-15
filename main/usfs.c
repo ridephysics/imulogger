@@ -379,10 +379,14 @@ static void usfs_task_fn(void *unused) {
         if (!atomic_load(&logging_enabled))
             continue;
 
-        CROSSLOGD("logging started");
+        enum usfs_mode mode = usfs_get_mode();
+        CROSSLOGD("logging started. mode:%d", mode);
 
-        switch (usfs_get_mode()) {
+        switch (mode) {
         case USFS_MODE_NORMAL:
+        case USFS_MODE_SELFTEST:
+            CROSSLOGD("open file");
+
             rc = sdcard_ref();
             if (rc) {
                 CROSSLOGE("can't ref sdcard");
@@ -414,11 +418,12 @@ static void usfs_task_fn(void *unused) {
             break;
 
         case USFS_MODE_BROADCAST:
+            CROSSLOGD("do broadcast");
             f = BROADCAST_MAGIC_PTR;
             break;
 
         default:
-            CROSSLOGE("invalid mode");
+            CROSSLOGE("invalid mode: %d", mode);
             goto stop_notify;
             break;
         }
@@ -427,29 +432,83 @@ static void usfs_task_fn(void *unused) {
         current_file = f;
         xSemaphoreGive(file_lock);
 
-        rc = usfs_write_hdr(f);
-        if (rc) {
-            CROSSLOGE("can't write hdr");
-            goto close_file;
+        switch (mode) {
+        case USFS_MODE_NORMAL:
+        case USFS_MODE_BROADCAST: {
+            CROSSLOGD("poll sensor");
+
+            rc = usfs_write_hdr(f);
+            if (rc) {
+                CROSSLOGE("can't write hdr");
+                goto close_file;
+            }
+
+            uintptr_t datacnt = 0;
+            uint64_t datatime = usfs_get_us();
+
+            while (atomic_load(&logging_enabled)) {
+                uint64_t sampletime;
+
+                rc = usfs_getwrite_sample(f, &sampletime);
+                if (rc) continue;
+
+                // calculate samplerate
+                datacnt++;
+                if (sampletime - datatime >= 10 * 1000 * 1000) {
+                    atomic_store(&samplerate, datacnt);
+                    datacnt = 0;
+                    datatime = sampletime;
+                    uev_event_post(&w_samplerate);
+                }
+            }
+            break;
+        }
+        case USFS_MODE_SELFTEST: {
+            size_t i;
+
+            CROSSLOGD("start selftest");
+
+            #ifndef CONFIG_IMULOGGER_SENTRAL_PASSTHROUGH
+            #error "unsupported"
+            #endif
+
+            for (i=0; i<1; i++) {
+                struct {
+                    int32_t accel[3];
+                    int32_t gyro[3];
+                } __attribute__((packed)) data;
+
+                rc = mpu_run_self_test(&mpu9250, data.gyro, data.accel, 0);
+                if (rc == 0x7) {
+                    CROSSLOGI("selftest successful");
+
+                    if (usfs_write(f, &data, sizeof(data))) {
+                        goto close_file;
+                    }
+                }
+                else {
+                    CROSSLOGE("selftest failed(%d):", rc);
+
+                    if (!(rc & 0x1))
+                        CROSSLOGE("\tgyro");
+                    if (!(rc & 0x2))
+                        CROSSLOGE("\taccel");
+                    if (!(rc & 0x4))
+                        CROSSLOGE("\tcompass");
+
+                    memset(&data, 0xff, sizeof(data));
+                    if (usfs_write(f, &data, sizeof(data))) {
+                        goto close_file;
+                    }
+                }
+            }
+            break;
         }
 
-        uintptr_t datacnt = 0;
-        uint64_t datatime = usfs_get_us();
-
-        while (atomic_load(&logging_enabled)) {
-            uint64_t sampletime;
-
-            rc = usfs_getwrite_sample(f, &sampletime);
-            if (rc) continue;
-
-            // calculate samplerate
-            datacnt++;
-            if (sampletime - datatime >= 10 * 1000 * 1000) {
-                atomic_store(&samplerate, datacnt);
-                datacnt = 0;
-                datatime = sampletime;
-                uev_event_post(&w_samplerate);
-            }
+        default:
+            CROSSLOGE("invalid mode: %d", mode);
+            goto close_file;
+            break;
         }
 
 close_file:

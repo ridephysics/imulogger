@@ -38,6 +38,7 @@ struct mqtt_ctx {
 enum usfs_mode {
     USFS_MODE_NORMAL,
     USFS_MODE_BROADCAST,
+    USFS_MODE_SELFTEST,
 };
 
 void init_usfs(uev_ctx_t *uev);
